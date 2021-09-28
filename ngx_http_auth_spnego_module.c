@@ -65,7 +65,7 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *);
 ngx_int_t
 ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t * r);
 
-    const char *
+static const char *
 get_gss_error(
         ngx_pool_t * p,
         OM_uint32 error_status,
@@ -434,7 +434,7 @@ ngx_spnego_authorized_principal(
     return false;
 }
 
-    ngx_int_t
+static ngx_int_t
 ngx_http_auth_spnego_token(
         ngx_http_request_t *r,
         ngx_http_auth_spnego_ctx_t *ctx)
@@ -491,7 +491,7 @@ ngx_http_auth_spnego_token(
     return NGX_OK;
 }
 
-    ngx_int_t
+static ngx_int_t
 ngx_http_auth_spnego_basic(
         ngx_http_request_t * r,
         ngx_http_auth_spnego_ctx_t * ctx,
@@ -809,7 +809,7 @@ use_keytab(
     return true;
 }
 
-    ngx_int_t
+static ngx_int_t
 ngx_http_auth_spnego_auth_user_gss(
         ngx_http_request_t * r,
         ngx_http_auth_spnego_ctx_t * ctx,
