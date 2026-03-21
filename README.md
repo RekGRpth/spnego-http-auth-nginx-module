@@ -19,8 +19,8 @@ Authentication has been tested with (at least) the following:
 The underlying kerberos library used for these tests was MIT KRB5 v1.12.
 
 
-Installation
-------------
+Installation from source
+------------------------
 
 1. Download [nginx source](http://www.nginx.org/en/download.html)
 1. Extract to a directory
@@ -31,6 +31,14 @@ and pass an `--add-module` option to nginx configure:
     ./configure --add-module=spnego-http-auth-nginx-module
 
 Note that if it isn't clear, you do need KRB5 (MIT or Heimdal) header files installed.  On Debian based distributions, including Ubuntu, this is the krb5-multidev, libkrb5-dev, heimdal-dev, or heimdal-multidev package depending on your environment.  On other Linux distributions, you want the development libraries that provide gssapi_krb5.h.
+
+Installation from distro packages
+---------------------------------
+
+Binary packages are available from the following Linux distros:
+
+* [Debian](https://packages.debian.org/libnginx-mod-http-auth-spnego) - `apt-get install libnginx-mod-http-auth-spnego`
+* [Ubuntu](https://packages.ubuntu.com/libnginx-mod-http-auth-spnego) - `apt-get install libnginx-mod-http-auth-spnego`
 
 Configuration reference
 -----------------------
