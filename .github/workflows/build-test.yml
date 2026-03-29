@@ -33,7 +33,7 @@ jobs:
             php-fpm php-ldap
 
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Create build directory
         run: |
