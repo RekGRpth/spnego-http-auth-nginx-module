@@ -1681,6 +1681,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     }
 
     gss_release_buffer(&minor_status, &output_token);
+    output_token = (gss_buffer_desc)GSS_C_EMPTY_BUFFER;
 
     ret = NGX_OK;
     goto end;
