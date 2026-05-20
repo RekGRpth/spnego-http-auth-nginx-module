@@ -1127,8 +1127,16 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         spnego_error(NGX_ERROR);
     }
 
+    char *passwd = ngx_pnalloc(r->pool, r->headers_in.passwd.len + 1);
+    if (passwd == NULL) {
+        spnego_log_error("Not enough memory");
+        spnego_error(NGX_ERROR);
+    }
+    ngx_memcpy(passwd, r->headers_in.passwd.data, r->headers_in.passwd.len);
+    passwd[r->headers_in.passwd.len] = '\0';
+
     code = krb5_get_init_creds_password(kcontext, &creds, client,
-                                        (char *)r->headers_in.passwd.data, NULL,
+                                        passwd, NULL,
                                         NULL, 0, NULL, options);
     if (code) {
         spnego_log_error("Kerberos error: Credentials failed");
