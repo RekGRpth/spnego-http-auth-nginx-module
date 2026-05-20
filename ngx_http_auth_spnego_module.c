@@ -145,6 +145,8 @@ typedef struct {
     ngx_flag_t protect;
     ngx_str_t realm;
     ngx_str_t keytab;
+    char *keytab_prefix_path;  /* "FILE:"-prefixed path, built at config time */
+    char *keytab_path;         /* plain path: keytab_prefix_path + 5 */
     ngx_str_t service_ccache;
     ngx_str_t srvcname;
     ngx_str_t shm_zone_name;
@@ -379,6 +381,15 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
 
     ngx_conf_merge_str_value(conf->realm, prev->realm, "");
     ngx_conf_merge_str_value(conf->keytab, prev->keytab, "/etc/krb5.keytab");
+
+    conf->keytab_prefix_path = ngx_pnalloc(cf->pool,
+                                            sizeof("FILE:") + conf->keytab.len);
+    if (conf->keytab_prefix_path == NULL)
+        return NGX_CONF_ERROR;
+    ngx_snprintf((u_char *)conf->keytab_prefix_path,
+                 sizeof("FILE:") + conf->keytab.len,
+                 "FILE:%V%Z", &conf->keytab);
+    conf->keytab_path = conf->keytab_prefix_path + (sizeof("FILE:") - 1);
 
     ngx_conf_merge_str_value(conf->service_ccache, prev->service_ccache, "");
 
@@ -1215,26 +1226,6 @@ ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r) {
     return NGX_OK;
 }
 
-static bool use_keytab(ngx_http_request_t *r, ngx_str_t *keytab) {
-    size_t kt_sz = keytab->len + 1;
-    char *kt = (char *)ngx_pcalloc(r->pool, kt_sz);
-    if (NULL == kt) {
-        return false;
-    }
-    ngx_snprintf((u_char *)kt, kt_sz, "%V%Z", keytab);
-    OM_uint32 major_status, minor_status = 0;
-    major_status = gsskrb5_register_acceptor_identity(kt);
-    if (GSS_ERROR(major_status)) {
-        spnego_log_error(
-            "%s failed to register keytab",
-            get_gss_error(r->pool, minor_status,
-                          "gsskrb5_register_acceptor_identity() failed"));
-        return false;
-    }
-
-    spnego_debug1("Use keytab %V", keytab);
-    return true;
-}
 
 static char *
 ngx_http_auth_spnego_build_tgs_principal(ngx_pool_t *pool,
@@ -1348,8 +1339,8 @@ done:
 }
 
 static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
-    ngx_http_request_t *r, const char *service_name, ngx_str_t *keytab_path,
-    ngx_str_t *service_ccache) {
+    ngx_http_request_t *r, const char *service_name,
+    const char *keytab_prefix_path, ngx_str_t *service_ccache) {
     krb5_context kcontext = NULL;
     krb5_keytab keytab = NULL;
     krb5_ccache ccache = NULL;
@@ -1359,7 +1350,6 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     krb5_creds creds;
     char *principal_name = NULL;
     char *tgs_principal_name = NULL;
-    char kt_path[1024];
     char cc_name[1024];
     OM_uint32 gss_minor;
 
@@ -1428,10 +1418,9 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     if ((kerr != KRB5_FCC_NOFILE && kerr != KRB5KRB_AP_ERR_TKT_EXPIRED))
         goto unlock;
 
-    ngx_snprintf((u_char *)kt_path, sizeof(kt_path), "FILE:%V%Z", keytab_path);
-
-    if ((kerr = krb5_kt_resolve(kcontext, kt_path, &keytab))) {
-        spnego_log_error("Kerberos error: Cannot resolve keytab %s", kt_path);
+    if ((kerr = krb5_kt_resolve(kcontext, keytab_prefix_path, &keytab))) {
+        spnego_log_error("Kerberos error: Cannot resolve keytab %s",
+                         keytab_prefix_path);
         spnego_log_krb5_error(kcontext, kerr);
         goto unlock;
     }
@@ -1525,10 +1514,13 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
     spnego_debug0("GSSAPI authorizing");
 
-    if (!use_keytab(r, &alcf->keytab)) {
-        spnego_debug0("Failed to specify keytab");
+    major_status = gsskrb5_register_acceptor_identity(alcf->keytab_path);
+    if (GSS_ERROR(major_status)) {
+        spnego_log_error("gsskrb5_register_acceptor_identity() failed for %s",
+                         alcf->keytab_path);
         spnego_error(NGX_ERROR);
     }
+    spnego_debug1("Use keytab %s", alcf->keytab_path);
 
     if (alcf->srvcname.len > 0) {
         /* if there is a specific service prinicipal set in the configuration
@@ -1572,7 +1564,8 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
         if (alcf->constrained_delegation) {
             ngx_http_auth_spnego_obtain_server_credentials(
-                r, (char *)service.value, &alcf->keytab, &alcf->service_ccache);
+                r, (char *)service.value, alcf->keytab_prefix_path,
+                &alcf->service_ccache);
         }
 
         /* Obtain credentials */
