@@ -45,17 +45,13 @@ Configuration reference
 
 You can configure GSS authentication on a per-location and/or a global basis:
 
-These options are required.
+The following options are mandatory:
 * `auth_gss`: on/off, for ease of unsecuring while leaving other options in
-  the config file
-* `auth_gss_keytab`: absolute path-name to keytab file containing service
-  credentials
+  the config file.
 
-These options should ONLY be specified if you have a keytab containing
-privileged principals.  In nearly all cases, you should not put these
-in the configuration file, as `gss_accept_sec_context` will do the right
-thing.
-* `auth_gss_realm`: Kerberos realm name.  If this is specified, the realm is only passed to the nginx variable $remote_user if it differs from this default.  To override this behavior, set *auth_gss_format_full* to `on` in your configuration.
+The following options are optional but commonly needed:
+* `auth_gss_keytab`: absolute path to the keytab file containing service
+  credentials. Defaults to `/etc/krb5.keytab`.
 * `auth_gss_service_name`: service principal name to use when acquiring
   credentials.  When the server is accessed via a DNS CNAME, this should be
   set to the full `service/canonical-hostname` form (e.g.
@@ -63,23 +59,25 @@ thing.
   record, not the CNAME alias — Kerberos clients typically resolve CNAMEs
   before requesting a service ticket.
 
+The following option should normally not be necessary:
+* `auth_gss_realm`: Kerberos realm name. In most deployments this should not
+  be set — the realm is negotiated automatically and misconfiguring it is a
+  common source of authentication failures. If set, the realm is only included
+  in the nginx variable `$remote_user` if it differs from this value.
+  To override this behavior, set `auth_gss_format_full` to `on` in your
+  configuration.
+
 If you would like to authorize only a specific set of principals, you can use the
-`auth_gss_authorized_principal` directive.  The configuration syntax supports
-multiple entries, one per line.
-
-    auth_gss_authorized_principal <primary1>@<realm>
-    auth_gss_authorized_principal <primary2>@<realm>
-
-Principals can also be authorized using a regex pattern via the `auth_gss_authorized_principal_regex`
-directive. This directive can be used together with the `auth_gss_authorized_principal` directive.
-
-    auth_gss_authorized_principal <primary1>@<realm>
-    auth_gss_authorized_principal_regex ^(<primary2>)/(<instance>)@<realm>$
+`auth_gss_authorized_principal` and/or `auth_gss_authorized_principal_regex` options
+(multiple entries are supported, one per line):
+* `auth_gss_authorized_principal`: a principal name as a string, e.g. `alice@EXAMPLE.COM`.
+* `auth_gss_authorized_principal_regex`: a regex to match against, e.g.
+  `^.*/admin@EXAMPLE.COM$`.
 
 The remote user header in nginx can only be set by doing basic authentication.
-Thus, this module sets a bogus basic auth header that will reach your backend
-application in order to set this header/nginx variable.  The easiest way to disable
-this behavior is to add the following configuration to your location config.
+Thus, this module sets a bogus basic auth header which will be visible to your backend
+application. The easiest way to hide this bogus header is to add the following configuration
+to your location config:
 
     proxy_set_header Authorization "";
 
