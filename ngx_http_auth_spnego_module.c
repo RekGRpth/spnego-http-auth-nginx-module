@@ -1763,8 +1763,8 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
         return ctx->ret;
     }
 
-    if (NULL != r->headers_in.user.data) {
-        spnego_debug0("User header set");
+    if (ctx->ret == NGX_OK) {
+        spnego_debug0("Already authenticated");
         return NGX_OK;
     }
 
