@@ -1267,7 +1267,7 @@ ngx_http_auth_spnego_build_tgs_principal(ngx_pool_t *pool,
 }
 
 static krb5_error_code ngx_http_auth_spnego_verify_server_credentials(
-    ngx_http_request_t *r, krb5_context kcontext, ngx_str_t *principal_name,
+    ngx_http_request_t *r, krb5_context kcontext, const char *principal_name,
     krb5_ccache ccache) {
     krb5_creds match_creds;
     krb5_creds creds;
@@ -1292,8 +1292,7 @@ static krb5_error_code ngx_http_auth_spnego_verify_server_credentials(
         goto done;
     }
 
-    if (ngx_strncmp(principal_name->data, princ_name, ngx_strlen(princ_name)) !=
-        0) {
+    if (ngx_strcmp(principal_name, princ_name) != 0) {
         spnego_log_error("Kerberos error: Principal name mismatch");
         spnego_debug0("Kerberos error: Principal name mismatch");
         kerr = KRB5KRB_ERR_GENERIC;
@@ -1341,6 +1340,8 @@ static krb5_error_code ngx_http_auth_spnego_verify_server_credentials(
                       creds.times.endtime);
     }
 done:
+    if (princ_name)
+        krb5_free_unparsed_name(kcontext, princ_name);
     if (principal)
         krb5_free_principal(kcontext, principal);
     if (tgs_principal_name)
@@ -1354,7 +1355,7 @@ done:
 }
 
 static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
-    ngx_http_request_t *r, ngx_str_t *service_name, ngx_str_t *keytab_path,
+    ngx_http_request_t *r, const char *service_name, ngx_str_t *keytab_path,
     ngx_str_t *service_ccache) {
     krb5_context kcontext = NULL;
     krb5_keytab keytab = NULL;
@@ -1401,10 +1402,9 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     if ((kerr = ngx_http_auth_spnego_verify_server_credentials(
              r, kcontext, service_name, ccache))) {
         if (kerr == KRB5_FCC_NOFILE || kerr == KRB5KRB_AP_ERR_TKT_EXPIRED) {
-            if ((kerr = krb5_parse_name(kcontext, (char *)service_name->data,
-                                        &principal))) {
+            if ((kerr = krb5_parse_name(kcontext, service_name, &principal))) {
                 spnego_log_error("Kerberos error: Cannot parse principal %s",
-                                 (char *)service_name->data);
+                                 service_name);
                 spnego_log_krb5_error(kcontext, kerr);
                 goto done;
             }
@@ -1535,12 +1535,12 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
          * file, we need to use it.  Otherwise, use the default of no
          * credentials
          */
-        service.length = alcf->srvcname.len + alcf->realm.len + 2;
-        service.value = ngx_palloc(r->pool, service.length);
+        service.length = alcf->srvcname.len + alcf->realm.len + 1; /* '@', no '\0' */
+        service.value = ngx_palloc(r->pool, service.length + 1);   /* +1 for '\0' */
         if (NULL == service.value) {
             spnego_error(NGX_ERROR);
         }
-        ngx_snprintf(service.value, service.length, "%V@%V%Z", &alcf->srvcname,
+        ngx_snprintf(service.value, service.length + 1, "%V@%V%Z", &alcf->srvcname,
                      &alcf->realm);
 
         spnego_debug1("Using service principal: %s", service.value);
@@ -1571,12 +1571,8 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
         }
 
         if (alcf->constrained_delegation) {
-            ngx_str_t service_name = ngx_null_string;
-            service_name.data = (u_char *)service.value;
-            service_name.len = service.length;
-
             ngx_http_auth_spnego_obtain_server_credentials(
-                r, &service_name, &alcf->keytab, &alcf->service_ccache);
+                r, (char *)service.value, &alcf->keytab, &alcf->service_ccache);
         }
 
         /* Obtain credentials */
