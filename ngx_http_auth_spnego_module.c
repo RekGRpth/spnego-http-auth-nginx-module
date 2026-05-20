@@ -40,7 +40,6 @@
 #define SHM_ZONE_NAME "shm_zone"
 #define RENEWAL_TIME 60
 
-#define discard_const(ptr) ((void *)((uintptr_t)(ptr)))
 
 #define spnego_log_krb5_error(context, code)                                   \
     {                                                                          \
@@ -1648,10 +1647,10 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
     if (output_token.length && alcf->map_to_local) {
         /* Apply local rules to map Kerberos Principals to short names */
-        gss_OID mech_type = discard_const(gss_mech_krb5);
+        gss_OID_desc krb5_mech = *gss_mech_krb5;
         gss_release_buffer(&minor_status2, &output_token);
         output_token = (gss_buffer_desc)GSS_C_EMPTY_BUFFER;
-        major_status = gss_localname(&minor_status, client_name, mech_type,
+        major_status = gss_localname(&minor_status, client_name, &krb5_mech,
                                      &output_token);
         if (GSS_ERROR(major_status)) {
             spnego_log_error("%s", get_gss_error(r->pool, minor_status,
