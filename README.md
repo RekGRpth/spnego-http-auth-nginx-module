@@ -57,7 +57,11 @@ in the configuration file, as `gss_accept_sec_context` will do the right
 thing.
 * `auth_gss_realm`: Kerberos realm name.  If this is specified, the realm is only passed to the nginx variable $remote_user if it differs from this default.  To override this behavior, set *auth_gss_format_full* to `on` in your configuration.
 * `auth_gss_service_name`: service principal name to use when acquiring
-  credentials.
+  credentials.  When the server is accessed via a DNS CNAME, this should be
+  set to the full `service/canonical-hostname` form (e.g.
+  `HTTP/webserver01.example.com`) matching the keytab entry and the A/AAAA
+  record, not the CNAME alias — Kerberos clients typically resolve CNAMEs
+  before requesting a service ticket.
 
 If you would like to authorize only a specific set of principals, you can use the
 `auth_gss_authorized_principal` directive.  The configuration syntax supports

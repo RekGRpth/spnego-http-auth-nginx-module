@@ -937,16 +937,25 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     }
 
     /*
-     * Use nginx's parsed request host when available. This is populated from
-     * Host/:authority by core request parsing and avoids dereferencing a NULL
-     * host header pointer on HTTP/2 and HTTP/3 requests.
+     * Use the configured server name from the matched virtual host, not the
+     * client-supplied Host header.  r->headers_in.server is derived from the
+     * Host header and is fully client-controlled; embedding it in the Kerberos
+     * service principal would allow a client to request a ticket for an
+     * arbitrary hostname.
      */
-    host_name = r->headers_in.server;
-    if (host_name.len == 0 && r->headers_in.host != NULL) {
-        host_name = r->headers_in.host->value;
-    }
+    ngx_http_core_srv_conf_t *cscf =
+        ngx_http_get_module_srv_conf(r, ngx_http_core_module);
+    host_name = cscf->server_name;
     if (host_name.len == 0) {
-        spnego_log_error("Client sent request without a valid host name");
+        spnego_log_error("auth_spnego: no server_name configured; set "
+                         "auth_gss_service_name to a full service/hostname "
+                         "principal to avoid this requirement");
+        spnego_error(NGX_ERROR);
+    } else if (host_name.data[0] == '*') {
+        spnego_log_error("auth_spnego: server_name \"%V\" is a wildcard and "
+                         "cannot be used as a Kerberos service hostname; set "
+                         "auth_gss_service_name to a full service/hostname "
+                         "principal", &host_name);
         spnego_error(NGX_ERROR);
     }
     service.len = alcf->srvcname.len + alcf->realm.len + 3;
