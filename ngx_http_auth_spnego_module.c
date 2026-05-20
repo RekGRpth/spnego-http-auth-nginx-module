@@ -1480,6 +1480,10 @@ done:
 
     if (tgs_principal_name)
         ngx_pfree(r->pool, tgs_principal_name);
+    if (principal_name)
+        krb5_free_unparsed_name(kcontext, principal_name);
+    if (principal)
+        krb5_free_principal(kcontext, principal);
     if (creds.client)
         krb5_free_cred_contents(kcontext, &creds);
     if (options)
