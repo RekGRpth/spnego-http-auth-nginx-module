@@ -140,6 +140,9 @@ typedef struct {
     ngx_flag_t constrained_delegation;
 } ngx_http_auth_spnego_loc_conf_t;
 
+static void ngx_http_auth_spnego_strip_realm(ngx_http_request_t *,
+                                             ngx_http_auth_spnego_loc_conf_t *);
+
 #define SPNEGO_NGX_CONF_FLAGS                                                  \
     NGX_HTTP_MAIN_CONF                                                         \
     | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_HTTP_LMT_CONF | NGX_CONF_FLAG
@@ -1020,6 +1023,8 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         }
     } else {
         if (alcf->realm.len && alcf->realm.data &&
+            (size_t)(r->headers_in.user.data + r->headers_in.user.len
+                     - (p + 1)) == alcf->realm.len &&
             ngx_strncmp(p + 1, alcf->realm.data, alcf->realm.len) == 0) {
             user.data = ngx_palloc(r->pool, user.len);
             if (NULL == user.data) {
@@ -1027,13 +1032,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                 spnego_error(NGX_ERROR);
             }
             ngx_snprintf(user.data, user.len, "%V%Z", &r->headers_in.user);
-            if (alcf->fqun == 0) {
-                /*
-                 * Specified realm is identical to configured realm.
-                 * Truncate $remote_user to strip @REALM.
-                 */
-                r->headers_in.user.len -= alcf->realm.len + 1;
-            }
+            ngx_http_auth_spnego_strip_realm(r, alcf);
         } else if (alcf->force_realm) {
             ngx_str_t short_user;
 
@@ -1171,6 +1170,33 @@ end:
     krb5_free_context(kcontext);
 
     return ret;
+}
+
+/*
+ * Conditionally strip the configured realm suffix from $remote_user.
+ */
+static void
+ngx_http_auth_spnego_strip_realm(ngx_http_request_t *r,
+                                  ngx_http_auth_spnego_loc_conf_t *alcf)
+{
+    u_char *at;
+    size_t rlen;
+
+    if (alcf->fqun || !alcf->realm.len || !alcf->realm.data)
+        return;
+
+    at = ngx_strlchr(r->headers_in.user.data,
+                     r->headers_in.user.data + r->headers_in.user.len, '@');
+    if (at == NULL)
+        return;
+
+    at++;
+    rlen = (size_t)(r->headers_in.user.data + r->headers_in.user.len - at);
+    if (rlen != alcf->realm.len)
+        return;
+
+    if (ngx_strncmp(at, alcf->realm.data, alcf->realm.len) == 0)
+        r->headers_in.user.len -= alcf->realm.len + 1;
 }
 
 /*
@@ -1495,7 +1521,6 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
                                    ngx_http_auth_spnego_ctx_t *ctx,
                                    ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_int_t ret = NGX_DECLINED;
-    u_char *pu;
     ngx_str_t spnego_token = ngx_null_string;
     OM_uint32 major_status, minor_status, minor_status2;
     gss_buffer_desc service = GSS_C_EMPTY_BUFFER;
@@ -1658,16 +1683,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
         r->headers_in.user.data = (u_char *)username;
         r->headers_in.user.len = output_token.length;
-        if (alcf->fqun == 0) {
-            pu = ngx_strlchr(r->headers_in.user.data,
-                             r->headers_in.user.data + r->headers_in.user.len,
-                             '@');
-            if (pu != NULL &&
-                ngx_strncmp(pu + 1, alcf->realm.data, alcf->realm.len) == 0) {
-                *pu = '\0';
-                r->headers_in.user.len = ngx_strlen(r->headers_in.user.data);
-            }
-        }
+        ngx_http_auth_spnego_strip_realm(r, alcf);
 
         /* this for the sake of ngx_http_variable_remote_user */
         if (ngx_http_auth_spnego_set_bogus_authorization(r) != NGX_OK) {
