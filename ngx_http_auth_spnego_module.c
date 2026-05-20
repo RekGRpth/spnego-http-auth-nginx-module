@@ -148,6 +148,8 @@ typedef struct {
     char *keytab_prefix_path;  /* "FILE:"-prefixed path, built at config time */
     char *keytab_path;         /* plain path: keytab_prefix_path + 5 */
     ngx_str_t service_ccache;
+    char *service_ccache_prefix_path; /* "FILE:"-prefixed, built at config time;
+                                         NULL when service_ccache is not set */
     ngx_str_t srvcname;
     ngx_str_t shm_zone_name;
     ngx_flag_t fqun;
@@ -392,6 +394,16 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
     conf->keytab_path = conf->keytab_prefix_path + (sizeof("FILE:") - 1);
 
     ngx_conf_merge_str_value(conf->service_ccache, prev->service_ccache, "");
+
+    if (conf->service_ccache.len) {
+        conf->service_ccache_prefix_path =
+            ngx_pnalloc(cf->pool, sizeof("FILE:") + conf->service_ccache.len);
+        if (conf->service_ccache_prefix_path == NULL)
+            return NGX_CONF_ERROR;
+        ngx_snprintf((u_char *)conf->service_ccache_prefix_path,
+                     sizeof("FILE:") + conf->service_ccache.len,
+                     "FILE:%V%Z", &conf->service_ccache);
+    }
 
     ngx_conf_merge_str_value(conf->srvcname, prev->srvcname, "");
 
@@ -1340,7 +1352,7 @@ done:
 
 static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     ngx_http_request_t *r, const char *service_name,
-    const char *keytab_prefix_path, ngx_str_t *service_ccache) {
+    const char *keytab_prefix_path, const char *service_ccache_prefix_path) {
     krb5_context kcontext = NULL;
     krb5_keytab keytab = NULL;
     krb5_ccache ccache = NULL;
@@ -1350,7 +1362,8 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     krb5_creds creds;
     char *principal_name = NULL;
     char *tgs_principal_name = NULL;
-    char cc_name[1024];
+    char cc_name_buf[1024];
+    const char *cc_name = NULL;
     OM_uint32 gss_minor;
 
     memset(&creds, 0, sizeof(creds));
@@ -1361,10 +1374,8 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
         goto done;
     }
 
-    if (service_ccache->len && service_ccache->data) {
-        ngx_snprintf((u_char *)cc_name, sizeof(cc_name), "FILE:%V%Z",
-                     service_ccache);
-
+    if (service_ccache_prefix_path != NULL) {
+        cc_name = service_ccache_prefix_path;
         if ((kerr = krb5_cc_resolve(kcontext, cc_name, &ccache))) {
             spnego_log_error("Kerberos error: Cannot resolve ccache %s",
                              cc_name);
@@ -1377,10 +1388,17 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
             spnego_log_krb5_error(kcontext, kerr);
             goto done;
         }
-
-        ngx_snprintf((u_char *)cc_name, sizeof(cc_name), "%s:%s",
-                     krb5_cc_get_type(kcontext, ccache),
-                     krb5_cc_get_name(kcontext, ccache));
+        const char *cc_type = krb5_cc_get_type(kcontext, ccache);
+        const char *cc_nm   = krb5_cc_get_name(kcontext, ccache);
+        size_t needed = ngx_strlen(cc_type) + 1 + ngx_strlen(cc_nm) + 1;
+        if (needed > sizeof(cc_name_buf)) {
+            spnego_log_error("Default ccache name too long (%uz bytes)", needed);
+            kerr = ENOMEM;
+            goto done;
+        }
+        ngx_snprintf((u_char *)cc_name_buf, sizeof(cc_name_buf), "%s:%s%Z",
+                     cc_type, cc_nm);
+        cc_name = cc_name_buf;
     }
 
     if ((kerr = ngx_http_auth_spnego_verify_server_credentials(
@@ -1565,7 +1583,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
         if (alcf->constrained_delegation) {
             ngx_http_auth_spnego_obtain_server_credentials(
                 r, (char *)service.value, alcf->keytab_prefix_path,
-                &alcf->service_ccache);
+                alcf->service_ccache_prefix_path);
         }
 
         /* Obtain credentials */
