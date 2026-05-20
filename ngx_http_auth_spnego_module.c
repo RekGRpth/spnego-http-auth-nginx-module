@@ -787,7 +787,7 @@ done:
         krb5_free_context(kcontext);
 }
 
-static char *ngx_http_auth_spnego_replace(ngx_http_request_t *r, char *str,
+static char *ngx_http_auth_spnego_replace(ngx_http_request_t *r, const char *str,
                                           char find, char replace) {
     size_t str_len = ngx_strlen(str);
     char *result = (char *)ngx_palloc(r->pool, str_len + 1);
@@ -806,7 +806,7 @@ static char *ngx_http_auth_spnego_replace(ngx_http_request_t *r, char *str,
 
 static ngx_int_t
 ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
-                                           ngx_str_t *principal_name,
+                                           const char *principal_name,
                                            creds_info delegated_creds) {
     krb5_context kcontext = NULL;
     krb5_principal principal = NULL;
@@ -830,16 +830,15 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
         goto done;
     }
 
-    if ((kerr = krb5_parse_name(kcontext, (char *)principal_name->data,
-                                &principal))) {
-        spnego_log_error("Kerberos error: Cannot parse principal \"%V\"",
+    if ((kerr = krb5_parse_name(kcontext, principal_name, &principal))) {
+        spnego_log_error("Kerberos error: Cannot parse principal \"%s\"",
                          principal_name);
         spnego_log_krb5_error(kcontext, kerr);
         goto done;
     }
 
     escaped =
-        ngx_http_auth_spnego_replace(r, (char *)principal_name->data, '/', '_');
+        ngx_http_auth_spnego_replace(r, principal_name, '/', '_');
     if (escaped == NULL) {
         kerr = ENOMEM;
         goto done;
@@ -1114,13 +1113,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
 
     if (alcf->delegate_credentials) {
         creds_info delegated_creds = {&creds, TYPE_KRB5_CREDS};
-
-        ngx_str_t principal_name = ngx_null_string;
-        principal_name.data = (u_char *)name;
-        principal_name.len = ngx_strlen(name);
-
-        ngx_http_auth_spnego_store_delegated_creds(r, &principal_name,
-                                                   delegated_creds);
+        ngx_http_auth_spnego_store_delegated_creds(r, name, delegated_creds);
     }
 
     krb5_free_cred_contents(kcontext, &creds);
@@ -1635,33 +1628,36 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
         spnego_error(NGX_ERROR);
     }
 
-    if (output_token.length) {
+    if (output_token.length && alcf->map_to_local) {
         /* Apply local rules to map Kerberos Principals to short names */
-        if (alcf->map_to_local) {
-            gss_OID mech_type = discard_const(gss_mech_krb5);
-            if (output_token.length) {
-                gss_release_buffer(&minor_status2, &output_token);
-            }
-            output_token = (gss_buffer_desc)GSS_C_EMPTY_BUFFER;
-            major_status = gss_localname(&minor_status, client_name, mech_type,
-                                         &output_token);
-            if (GSS_ERROR(major_status)) {
-                spnego_log_error("%s", get_gss_error(r->pool, minor_status,
-                                                     "gss_localname() failed"));
-                spnego_error(NGX_ERROR);
-            }
-        }
-
-        /* TOFIX dirty quick trick for now (no "-1" i.e. include '\0' */
-        ngx_str_t user = {output_token.length, (u_char *)output_token.value};
-
-        r->headers_in.user.data = ngx_pstrdup(r->pool, &user);
-        if (NULL == r->headers_in.user.data) {
-            spnego_log_error("ngx_pstrdup failed to allocate");
+        gss_OID mech_type = discard_const(gss_mech_krb5);
+        gss_release_buffer(&minor_status2, &output_token);
+        output_token = (gss_buffer_desc)GSS_C_EMPTY_BUFFER;
+        major_status = gss_localname(&minor_status, client_name, mech_type,
+                                     &output_token);
+        if (GSS_ERROR(major_status)) {
+            spnego_log_error("%s", get_gss_error(r->pool, minor_status,
+                                                 "gss_localname() failed"));
             spnego_error(NGX_ERROR);
         }
+    }
 
-        r->headers_in.user.len = user.len;
+    if (output_token.length) {
+        char *username = ngx_pnalloc(r->pool, output_token.length + 1);
+        if (NULL == username) {
+            spnego_log_error("Not enough memory");
+            spnego_error(NGX_ERROR);
+        }
+        ngx_memcpy(username, output_token.value, output_token.length);
+        username[output_token.length] = '\0';
+
+        if (alcf->delegate_credentials) {
+            creds_info creds = {delegated_creds, TYPE_GSS_CRED_ID_T};
+            ngx_http_auth_spnego_store_delegated_creds(r, username, creds);
+        }
+
+        r->headers_in.user.data = (u_char *)username;
+        r->headers_in.user.len = output_token.length;
         if (alcf->fqun == 0) {
             pu = ngx_strlchr(r->headers_in.user.data,
                              r->headers_in.user.data + r->headers_in.user.len,
@@ -1678,16 +1674,6 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
             spnego_log_error("Failed to set remote_user");
         }
         spnego_debug1("user is %V", &r->headers_in.user);
-    }
-
-    if (alcf->delegate_credentials) {
-        creds_info creds = {delegated_creds, TYPE_GSS_CRED_ID_T};
-
-        ngx_str_t principal_name = ngx_null_string;
-        principal_name.data = (u_char *)output_token.value;
-        principal_name.len = output_token.length;
-
-        ngx_http_auth_spnego_store_delegated_creds(r, &principal_name, creds);
     }
 
     gss_release_buffer(&minor_status, &output_token);
