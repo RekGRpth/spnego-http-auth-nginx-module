@@ -135,6 +135,42 @@ These options affect the operation of basic authentication:
   if one was specified by the client.
 
 
+Channel Bindings
+----------------
+
+The `auth_gss_channel_binding` directive binds a Kerberos authentication
+exchange to the TLS session it travels over, preventing a man-in-the-middle
+attack where a valid Negotiate token is relayed to a different server. The
+directive requires TLS; configuring it on a plain HTTP connection will cause
+authentication to fail.
+
+    auth_gss_channel_binding off;              # default – existing behaviour
+    auth_gss_channel_binding server-end-point; # RFC 5929 – hash of server cert
+    auth_gss_channel_binding exporter;         # RFC 9266 – TLS keying material (tech demo)
+
+**`server-end-point`** ([RFC5929](https://www.rfc-editor.org/rfc/rfc5929.html))
+hashes the server's TLS certificate. This is the only type supported by
+mainstream clients (see the table below).
+
+**`exporter`** ([RFC9266](https://www.rfc-editor.org/rfc/rfc9266.html)) derives
+32 bytes from the TLS keying material. This type is provided for
+experimentation only; do not use it in production.
+
+### Client support
+
+| Client          | Support | Notes |
+|-----------------|---------|-------|
+| curl            | **Yes** | curl ≥ 8.10.0 with OpenSSL (see [curl PR #13098](https://github.com/curl/curl/pull/13098)) and MIT Kerberos ≥ 1.19. |
+| Firefox (Linux) | **No**  | See [Mozilla bug #563276](https://bugzilla.mozilla.org/show_bug.cgi?id=563276) |
+| Chrome (Linux)  | **No**  | See the reference to `GSS_C_NO_CHANNEL_BINDINGS` in [the source](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/http_auth_gssapi_posix.cc). |
+| Windows clients | **Yes** | IE, Edge, Chrome, Firefox, etc support this automatically via [SSPI](https://en.wikipedia.org/wiki/Security_Support_Provider_Interface). |
+
+Because Firefox and Chrome on Linux do not support channel bindings, setting
+`auth_gss_channel_binding server-end-point` will cause those browsers to fail.
+Restrict this directive to deployments where all clients are known to have
+proper support for channel bindings.
+
+
 Troubleshooting
 ---------------
 

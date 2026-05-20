@@ -18,6 +18,9 @@ EX=0
 CURL_OUTPUT="http_body"
 CURL_NONEGOTIATE="curl --max-time 60 --silent --fail-with-body -o ${CURL_OUTPUT}"
 CURL_NEGOTIATE="${CURL_NONEGOTIATE} --negotiate -u :"
+CURL_HTTPS_NONEGOTIATE="${CURL_NONEGOTIATE} --insecure"
+CURL_HTTPS_NEGOTIATE="${CURL_NEGOTIATE} --insecure"
+HTTPS_PORT="8443"
 DOMAIN="example.com"
 TEST_HOST="server"
 TEST_HOST_FQDN="${TEST_HOST}.${DOMAIN}"
@@ -384,6 +387,16 @@ fi
 echo "OK"
 
 
+printf "Generating self-signed TLS certificate for channel binding tests ... "
+mkdir -p /etc/nginx/ssl || die
+openssl req -x509 -nodes -newkey rsa:2048 \
+	-keyout /etc/nginx/ssl/cb_test.key \
+	-out /etc/nginx/ssl/cb_test.crt \
+	-days 365 \
+	-subj "/CN=${TEST_HOST_FQDN}" > /dev/null 2>&1 || die
+echo "OK"
+
+
 printf "Creating nginx test site ... "
 if ! cat <<EOF > /etc/nginx/sites-available/kerberos
 # SPNEGO/Kerberos server test configuration
@@ -450,6 +463,75 @@ server {
                 auth_gss_delegate_credentials on;
                 auth_gss_constrained_delegation on;
 	}
+
+	# Channel binding directive on plain HTTP: no TLS session exists so the
+	# module fails with a 500 error.
+	location /cbinding_sep.php {
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php-fpm.sock;
+                auth_gss on;
+                auth_gss_realm ${KERBEROS_REALM};
+                auth_gss_keytab /etc/krb5.http.keytab;
+                auth_gss_service_name HTTP/${TEST_HOST_FQDN};
+                auth_gss_allow_basic_fallback off;
+                auth_gss_authorized_principal alice@${KERBEROS_REALM};
+                auth_gss_format_full on;
+                fastcgi_param HTTP_AUTHORIZATION "";
+                auth_gss_channel_binding server-end-point;
+	}
+}
+
+# HTTPS server for channel binding tests.
+server {
+	listen ${HTTPS_PORT} ssl;
+	listen [::]:${HTTPS_PORT} ssl;
+
+	ssl_certificate     /etc/nginx/ssl/cb_test.crt;
+	ssl_certificate_key /etc/nginx/ssl/cb_test.key;
+	ssl_protocols       TLSv1.2 TLSv1.3;
+
+	root /var/www/kerberos;
+
+	server_name ${TEST_HOST_FQDN};
+
+	# Sanity check: plain HTTPS connectivity, no auth.
+	location /noauth.php {
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php-fpm.sock;
+		auth_gss off;
+	}
+
+	# RFC 5929 tls-server-end-point binding: clients must send matching
+	# channel binding or are rejected with 403.
+	location /cbinding_sep.php {
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php-fpm.sock;
+                auth_gss on;
+                auth_gss_realm ${KERBEROS_REALM};
+                auth_gss_keytab /etc/krb5.http.keytab;
+                auth_gss_service_name HTTP/${TEST_HOST_FQDN};
+                auth_gss_allow_basic_fallback off;
+                auth_gss_authorized_principal alice@${KERBEROS_REALM};
+                auth_gss_format_full on;
+                fastcgi_param HTTP_AUTHORIZATION "";
+                auth_gss_channel_binding server-end-point;
+	}
+
+	# RFC 9266 tls-exporter binding: no mainstream client supports this
+	# for HTTP Negotiate, so all authenticated requests are rejected with 403.
+	location /cbinding_exp.php {
+		include snippets/fastcgi-php.conf;
+		fastcgi_pass unix:/run/php/php-fpm.sock;
+                auth_gss on;
+                auth_gss_realm ${KERBEROS_REALM};
+                auth_gss_keytab /etc/krb5.http.keytab;
+                auth_gss_service_name HTTP/${TEST_HOST_FQDN};
+                auth_gss_allow_basic_fallback off;
+                auth_gss_authorized_principal alice@${KERBEROS_REALM};
+                auth_gss_format_full on;
+                fastcgi_param HTTP_AUTHORIZATION "";
+                auth_gss_channel_binding exporter;
+	}
 }
 EOF
 then
@@ -503,6 +585,24 @@ EOF
 then
 	die
 fi
+echo "OK"
+
+
+printf "Writing cbinding_sep.php and cbinding_exp.php ... "
+if ! cat <<'EOF' > /var/www/kerberos/cbinding_sep.php
+<?php
+	if (!isset($_SERVER["REMOTE_USER"]) || $_SERVER["REMOTE_USER"] == "") {
+		http_response_code(500);
+		echo("REMOTE_USER not set");
+		exit();
+	}
+	echo("Authenticated as " . $_SERVER["REMOTE_USER"]);
+?>
+EOF
+then
+	die
+fi
+cp /var/www/kerberos/cbinding_sep.php /var/www/kerberos/cbinding_exp.php || die
 echo "OK"
 
 
@@ -656,6 +756,59 @@ test_basic()
 
 }
 
+test_https_path()
+{
+	SUBURL="$1"
+	EXPECT1="$2"
+	EXPECT2="$3"
+
+	printf "curl https://%s:%s/%s, no negotiate: http status (expect %s)=" \
+		"${TEST_HOST_FQDN}" "${HTTPS_PORT}" "${SUBURL}" "${EXPECT1}"
+	rm -f "${CURL_OUTPUT}"
+	CODE="$($CURL_HTTPS_NONEGOTIATE -w "%{http_code}" \
+		"https://${TEST_HOST_FQDN}:${HTTPS_PORT}/${SUBURL}")" || true
+	printf "%s ... " "${CODE}"
+	if [ "$CODE" = "${EXPECT1}" ]; then
+		echo "OK"
+	else
+		EX=1
+		echo "FAILED"
+		if [ -e "${CURL_OUTPUT}" ]; then
+			echo "HTTP body:"
+			cat "${CURL_OUTPUT}"
+			echo ""
+		fi
+	fi
+
+	printf "curl https://%s:%s/%s, negotiate: http status (expect %s)=" \
+		"${TEST_HOST_FQDN}" "${HTTPS_PORT}" "${SUBURL}" "${EXPECT2}"
+	rm -f "${CURL_OUTPUT}"
+	CODE="$($CURL_HTTPS_NEGOTIATE -w "%{http_code}" \
+		"https://${TEST_HOST_FQDN}:${HTTPS_PORT}/${SUBURL}")" || true
+	printf "%s ... " "${CODE}"
+	if [ "$CODE" = "${EXPECT2}" ]; then
+		echo "OK"
+	else
+		EX=1
+		echo "FAILED"
+		if [ -e "${CURL_OUTPUT}" ]; then
+			echo "HTTP body:"
+			cat "${CURL_OUTPUT}"
+			echo ""
+		fi
+	fi
+}
+
+curl_supports_channel_binding()
+{
+	curl --version | grep -q OpenSSL || return 1
+	set -- $(curl --version | head -1 | awk '{print $2}' | tr '.' ' ')
+	CMAJ="${1:-0}" CMIN="${2:-0}"
+	[ "${CMAJ}" -gt 8 ] && return 0
+	[ "${CMAJ}" -eq 8 ] && [ "${CMIN}" -ge 10 ] && return 0
+	return 1
+}
+
 test_ldapwhoami()
 {
 	LDAP_EXPECTED="dn:uid=${1},cn=gss-spnego,cn=auth"
@@ -803,6 +956,84 @@ else
 fi
 test_path "delegate.php" 401 200
 test_ldapwhoami "alice"
+
+
+echo ""
+echo "=== Channel binding tests ==="
+echo ""
+
+printf "Destroying Kerberos tickets ... "
+kdestroy -q > /dev/null 2>&1 || true
+echo "OK"
+
+# Plain HTTP + auth_gss_channel_binding server-end-point: no TLS session
+# exists so the module fails with a 500 error.
+echo ""
+echo "--- Channel binding directive on plain HTTP (expect 401/500) ---"
+test_path "cbinding_sep.php" 401 401
+
+printf "Obtaining Kerberos ticket for alice ... "
+if kinit -kt krb5.alice.keytab alice; then
+	echo "OK"
+else
+	EX=1
+	echo "FAILED"
+fi
+test_path "cbinding_sep.php" 401 500
+
+# HTTPS sanity: verify the TLS server is reachable before the CB tests.
+echo ""
+echo "--- HTTPS connectivity sanity check ---"
+test_https_path "noauth.php" 200 200
+
+echo ""
+echo "--- HTTPS + auth_gss_channel_binding server-end-point ---"
+if curl_supports_channel_binding; then
+	echo "    curl supports tls-server-end-point (curl >= 8.10.0 + OpenSSL)"
+	# Unauthenticated: 401 challenge.
+	# Authenticated with matching channel binding: 200.
+	test_https_path "cbinding_sep.php" 401 200
+
+	printf "Destroying Kerberos tickets ... "
+	kdestroy -q > /dev/null 2>&1 || true
+	echo "OK"
+
+	# No ticket: both unauthenticated and negotiate return 401.
+	test_https_path "cbinding_sep.php" 401 401
+else
+	echo "    curl does not support tls-server-end-point"
+	echo "    (requires curl >= 8.10.0 built against OpenSSL;"
+	echo "     see https://github.com/curl/curl/pull/13098)"
+	# Unauthenticated: 401 challenge.
+	# Authenticated without a channel binding: GSS_C_CHANNEL_BOUND_FLAG not
+	# set, rejected with 403 (allow_basic_fallback is off).
+	test_https_path "cbinding_sep.php" 401 403
+fi
+
+echo ""
+echo "--- HTTPS + auth_gss_channel_binding exporter (always 401/403) ---"
+echo "    No mainstream client sends tls-exporter channel binding for HTTP Negotiate."
+# Re-obtain ticket if it was destroyed above.
+if ! klist -s > /dev/null 2>&1; then
+	printf "Obtaining Kerberos ticket for alice ... "
+	if kinit -kt krb5.alice.keytab alice; then
+		echo "OK"
+	else
+		EX=1
+		echo "FAILED"
+	fi
+fi
+# Unauthenticated: 401 challenge.
+# Authenticated: GSS_C_CHANNEL_BOUND_FLAG never set (no client sends
+# tls-exporter); rejected with 403.
+test_https_path "cbinding_exp.php" 401 403
+
+printf "Destroying Kerberos tickets ... "
+kdestroy -q > /dev/null 2>&1 || true
+echo "OK"
+
+# No ticket: both unauthenticated and negotiate return 401.
+test_https_path "cbinding_exp.php" 401 401
 
 
 echo ""
