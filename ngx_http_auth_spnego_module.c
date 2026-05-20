@@ -40,7 +40,6 @@
 #define SHM_ZONE_NAME "shm_zone"
 #define RENEWAL_TIME 60
 
-
 #define spnego_log_krb5_error(context, code)                                   \
     {                                                                          \
         const char *___kerror = krb5_get_error_message(context, code);         \
@@ -61,28 +60,6 @@
                    three)
 #define spnego_log_error(fmt, args...)                                         \
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, fmt, ##args)
-
-#ifndef krb5_realm_length
-#define krb5_realm_length(r) ((r).length)
-#define krb5_realm_data(r) ((r).data)
-#endif
-
-#ifdef krb5_princ_realm
-/*
- * MIT does not have krb5_principal_get_realm() but its
- * krb5_princ_realm() is a macro that effectively points
- * to a char *.
- */
-static const char *krb5_principal_get_realm(krb5_context ctx,
-                                            krb5_const_principal princ) {
-    const krb5_data *data;
-
-    data = krb5_princ_realm(ctx, princ);
-    if (!data || !data->data)
-        return NULL;
-    return data->data;
-}
-#endif
 
 /* Module handler */
 static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *);
@@ -1143,7 +1120,8 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     if (alcf->fqun &&
         !ngx_strlchr(r->headers_in.user.data,
                      r->headers_in.user.data + r->headers_in.user.len, '@')) {
-        const char *realm = krb5_principal_get_realm(kcontext, client);
+        const char *realm_at = strrchr(name, '@');
+        const char *realm = (realm_at && realm_at[1]) ? realm_at + 1 : NULL;
         if (realm) {
             new_user.len = r->headers_in.user.len + 1 + ngx_strlen(realm);
             new_user.data = ngx_palloc(r->pool, new_user.len);
@@ -1240,24 +1218,20 @@ ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r) {
 
 static char *
 ngx_http_auth_spnego_build_tgs_principal(ngx_pool_t *pool,
-                                         krb5_principal principal) {
-    if (!principal)
+                                         const char *princ_name) {
+    const char *realm = strrchr(princ_name, '@');
+    if (!realm || !realm[1])
         return NULL;
-
-    u_char *realm = (u_char *)krb5_realm_data(principal->realm);
-    size_t realm_len = krb5_realm_length(principal->realm);
-    size_t name_len = ngx_strlen(KRB5_TGS_NAME) + 1 /* '/' */
-                      + realm_len                   /* REALM */
-                      + 1                           /* '@' */
-                      + realm_len                   /* REALM */
-                      + 1;                          /* '\0' */
+    realm++;
+    size_t realm_len = ngx_strlen(realm);
+    size_t name_len = sizeof(KRB5_TGS_NAME) + 2 * realm_len + 2; /* krbtgt/REALM@REALM\0 */
 
     char *name = ngx_pcalloc(pool, name_len);
     if (!name)
         return NULL;
 
-    ngx_snprintf((u_char *)name, name_len, "%s/%*s@%*s", KRB5_TGS_NAME,
-                 realm_len, realm, realm_len, realm);
+    ngx_snprintf((u_char *)name, name_len, "%s/%s@%s%Z",
+                 KRB5_TGS_NAME, realm, realm);
     return name;
 }
 
@@ -1295,7 +1269,7 @@ static krb5_error_code ngx_http_auth_spnego_verify_server_credentials(
     }
 
     tgs_principal_name =
-        ngx_http_auth_spnego_build_tgs_principal(r->pool, principal);
+        ngx_http_auth_spnego_build_tgs_principal(r->pool, princ_name);
     if (!tgs_principal_name) {
         spnego_log_error("ngx_http_auth_spnego_build_tgs_principal() failed");
         kerr = ENOMEM;
@@ -1453,7 +1427,7 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     krb5_get_init_creds_opt_set_forwardable(options, 1);
 
     tgs_principal_name =
-        ngx_http_auth_spnego_build_tgs_principal(r->pool, principal);
+        ngx_http_auth_spnego_build_tgs_principal(r->pool, principal_name);
     if (!tgs_principal_name) {
         spnego_log_error("ngx_http_auth_spnego_build_tgs_principal() failed");
         kerr = ENOMEM;
