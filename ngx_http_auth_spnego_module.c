@@ -1361,6 +1361,7 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     char *tgs_principal_name = NULL;
     char kt_path[1024];
     char cc_name[1024];
+    OM_uint32 gss_minor;
 
     memset(&creds, 0, sizeof(creds));
 
@@ -1473,7 +1474,9 @@ unlock:
 done:
     if (!kerr) {
         spnego_debug0("Successfully obtained server credentials");
-        setenv("KRB5CCNAME", cc_name, 1);
+        /* failure is logged but not fatal: gss_acquire_cred will fail on its own */
+        if (GSS_ERROR(gss_krb5_ccache_name(&gss_minor, cc_name, NULL)))
+            spnego_log_error("gss_krb5_ccache_name() failed for %s", cc_name);
     } else {
         spnego_debug0("Failed to obtain server credentials");
     }
