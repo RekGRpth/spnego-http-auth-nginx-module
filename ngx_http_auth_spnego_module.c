@@ -1725,7 +1725,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
                                    ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_int_t ret = NGX_DECLINED;
     ngx_str_t spnego_token = ngx_null_string;
-    OM_uint32 major_status, minor_status, minor_status2, ret_flags;
+    OM_uint32 major_status, minor_status, ret_flags;
     gss_buffer_desc service = GSS_C_EMPTY_BUFFER;
     gss_name_t my_gss_name = GSS_C_NO_NAME;
 
@@ -1779,7 +1779,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
         spnego_debug2("my_gss_name %*s", human_readable_gss_name.length,
                       human_readable_gss_name.value);
         if (human_readable_gss_name.length) {
-            gss_release_buffer(&minor_status2, &human_readable_gss_name);
+            gss_release_buffer(&minor_status, &human_readable_gss_name);
         }
 
         if (alcf->constrained_delegation) {
@@ -1853,11 +1853,11 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
             ngx_pcalloc(r->pool, ctx->token_out_b64.len + 1);
         if (NULL == ctx->token_out_b64.data) {
             spnego_log_error("Not enough memory");
-            gss_release_buffer(&minor_status2, &output_token);
+            gss_release_buffer(&minor_status, &output_token);
             spnego_error(NGX_ERROR);
         }
         ngx_encode_base64(&ctx->token_out_b64, &spnego_token);
-        gss_release_buffer(&minor_status2, &output_token);
+        gss_release_buffer(&minor_status, &output_token);
     } else {
         ctx->token_out_b64.len = 0;
     }
@@ -1874,7 +1874,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     if (output_token.length && alcf->map_to_local) {
         /* Apply local rules to map Kerberos Principals to short names */
         gss_OID_desc krb5_mech = *gss_mech_krb5;
-        gss_release_buffer(&minor_status2, &output_token);
+        gss_release_buffer(&minor_status, &output_token);
         output_token = (gss_buffer_desc)GSS_C_EMPTY_BUFFER;
         major_status = gss_localname(&minor_status, client_name, &krb5_mech,
                                      &output_token);
