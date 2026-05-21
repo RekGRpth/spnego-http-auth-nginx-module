@@ -914,6 +914,37 @@ done:
     return kerr ? NGX_ERROR : NGX_OK;
 }
 
+/*
+ * Return a pointer to the start of the realm part (i.e. after the
+ * first unescaped '@').
+ */
+static u_char *
+ngx_http_auth_spnego_realm_from_str(ngx_str_t s, size_t *realm_len)
+{
+    u_char *p, *at = NULL;
+    u_char prev = 0;
+
+    for (p = s.data; p < s.data + s.len; p++) {
+        if (prev == '\\' && *p == '\\') {
+            prev = 0;
+            continue;
+        } else if (*p == '@' && prev != '\\') {
+            at = p;
+            break;
+        }
+        prev = *p;
+    }
+
+    if (at == NULL)
+        return NULL;
+
+    if (realm_len)
+        *realm_len = (size_t)(s.data + s.len - (at + 1));
+
+    return at + 1;
+}
+
+
 ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx,
                                      ngx_http_auth_spnego_loc_conf_t *alcf) {
@@ -931,7 +962,8 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     krb5_creds creds;
     krb5_get_init_creds_opt *options = NULL;
     char *name = NULL;
-    unsigned char *p = NULL;
+    u_char *realm = NULL;
+    size_t realm_len = 0;
 
     code = krb5_init_context(&kcontext);
     if (code) {
@@ -1000,10 +1032,9 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     free(name);
     name = NULL;
 
-    p = ngx_strlchr(r->headers_in.user.data,
-                    r->headers_in.user.data + r->headers_in.user.len, '@');
+    realm = ngx_http_auth_spnego_realm_from_str(r->headers_in.user, &realm_len);
     user.len = r->headers_in.user.len + 1;
-    if (NULL == p) {
+    if (realm == NULL) {
         if (alcf->force_realm && alcf->realm.len && alcf->realm.data) {
             user.len += alcf->realm.len + 1; /* +1 for @ */
             user.data = ngx_palloc(r->pool, user.len);
@@ -1023,9 +1054,8 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         }
     } else {
         if (alcf->realm.len && alcf->realm.data &&
-            (size_t)(r->headers_in.user.data + r->headers_in.user.len
-                     - (p + 1)) == alcf->realm.len &&
-            ngx_strncmp(p + 1, alcf->realm.data, alcf->realm.len) == 0) {
+            realm_len == alcf->realm.len &&
+            ngx_strncmp(realm, alcf->realm.data, alcf->realm.len) == 0) {
             user.data = ngx_palloc(r->pool, user.len);
             if (NULL == user.data) {
                 spnego_log_error("Not enough memory");
@@ -1037,7 +1067,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
             ngx_str_t short_user;
 
             short_user.data = r->headers_in.user.data;
-            short_user.len = p - r->headers_in.user.data;
+            short_user.len = (realm - 1) - r->headers_in.user.data;
             user.len = short_user.len + 1;
             if (alcf->realm.len && alcf->realm.data)
                 user.len += alcf->realm.len + 1;
@@ -1126,8 +1156,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     krb5_free_cred_contents(kcontext, &creds);
     /* Try to add the system realm to $remote_user if needed. */
     if (alcf->fqun &&
-        !ngx_strlchr(r->headers_in.user.data,
-                     r->headers_in.user.data + r->headers_in.user.len, '@')) {
+        !ngx_http_auth_spnego_realm_from_str(r->headers_in.user, NULL)) {
         const char *realm_at = strrchr(name, '@');
         const char *realm = (realm_at && realm_at[1]) ? realm_at + 1 : NULL;
         if (realm) {
@@ -1179,23 +1208,17 @@ static void
 ngx_http_auth_spnego_strip_realm(ngx_http_request_t *r,
                                   ngx_http_auth_spnego_loc_conf_t *alcf)
 {
-    u_char *at;
+    u_char *realm;
     size_t rlen;
 
     if (alcf->fqun || !alcf->realm.len || !alcf->realm.data)
         return;
 
-    at = ngx_strlchr(r->headers_in.user.data,
-                     r->headers_in.user.data + r->headers_in.user.len, '@');
-    if (at == NULL)
+    realm = ngx_http_auth_spnego_realm_from_str(r->headers_in.user, &rlen);
+    if (realm == NULL || rlen != alcf->realm.len)
         return;
 
-    at++;
-    rlen = (size_t)(r->headers_in.user.data + r->headers_in.user.len - at);
-    if (rlen != alcf->realm.len)
-        return;
-
-    if (ngx_strncmp(at, alcf->realm.data, alcf->realm.len) == 0)
+    if (ngx_strncmp(realm, alcf->realm.data, alcf->realm.len) == 0)
         r->headers_in.user.len -= alcf->realm.len + 1;
 }
 
