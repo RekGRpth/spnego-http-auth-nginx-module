@@ -75,7 +75,7 @@ static char *ngx_conf_set_regex_array_slot(ngx_conf_t *cf, ngx_command_t *cmd,
 
 ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r);
 
-const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *prefix) {
+static const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *prefix) {
     OM_uint32 maj_stat, min_stat;
     OM_uint32 msg_ctx = 0;
     gss_buffer_desc status_string;
