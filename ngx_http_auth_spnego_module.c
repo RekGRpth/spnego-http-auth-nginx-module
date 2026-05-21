@@ -531,6 +531,27 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
 }
 
 static ngx_int_t
+ngx_http_auth_spnego_add_www_authenticate(ngx_http_request_t *r,
+                                          ngx_str_t *value, ngx_uint_t hash)
+{
+    ngx_table_elt_t *h = ngx_list_push(&r->headers_out.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    h->hash = hash;
+#if defined(nginx_version) && nginx_version >= 1023000
+    h->next = NULL;
+#endif
+    h->key.len = sizeof("WWW-Authenticate") - 1;
+    h->key.data = (u_char *)"WWW-Authenticate";
+    h->value = *value;
+
+    r->headers_out.www_authenticate = h;
+    return NGX_OK;
+}
+
+static ngx_int_t
 ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
                                         ngx_http_auth_spnego_ctx_t *ctx,
                                         ngx_http_auth_spnego_loc_conf_t *alcf) {
@@ -541,22 +562,12 @@ ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
         return NGX_ERROR;
     }
     ngx_snprintf(value.data, value.len, "Basic realm=\"%V\"", &alcf->realm);
-    r->headers_out.www_authenticate = ngx_list_push(&r->headers_out.headers);
-    if (NULL == r->headers_out.www_authenticate) {
+
+    if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
         return NGX_ERROR;
     }
 
-    r->headers_out.www_authenticate->hash = 1;
-#if defined(nginx_version) && nginx_version >= 1023000
-    r->headers_out.www_authenticate->next = NULL;
-#endif
-    r->headers_out.www_authenticate->key.len = sizeof("WWW-Authenticate") - 1;
-    r->headers_out.www_authenticate->key.data = (u_char *)"WWW-Authenticate";
-    r->headers_out.www_authenticate->value.len = value.len;
-    r->headers_out.www_authenticate->value.data = value.data;
-
     ctx->head = 1;
-
     return NGX_OK;
 }
 
@@ -580,19 +591,9 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
         ngx_snprintf(value.data, value.len, "Negotiate %V", token);
     }
 
-    r->headers_out.www_authenticate = ngx_list_push(&r->headers_out.headers);
-    if (NULL == r->headers_out.www_authenticate) {
+    if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
         return NGX_ERROR;
     }
-
-    r->headers_out.www_authenticate->hash = 1;
-#if defined(nginx_version) && nginx_version >= 1023000
-    r->headers_out.www_authenticate->next = NULL;
-#endif
-    r->headers_out.www_authenticate->key.len = sizeof("WWW-Authenticate") - 1;
-    r->headers_out.www_authenticate->key.data = (u_char *)"WWW-Authenticate";
-    r->headers_out.www_authenticate->value.len = value.len;
-    r->headers_out.www_authenticate->value.data = value.data;
 
     if (alcf->allow_basic) {
         ngx_str_t value2 = ngx_null_string;
@@ -603,26 +604,13 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
         }
         ngx_snprintf(value2.data, value2.len, "Basic realm=\"%V\"",
                      &alcf->realm);
-        r->headers_out.www_authenticate =
-            ngx_list_push(&r->headers_out.headers);
-        if (NULL == r->headers_out.www_authenticate) {
+
+        if (ngx_http_auth_spnego_add_www_authenticate(r, &value2, 2) != NGX_OK) {
             return NGX_ERROR;
         }
-
-        r->headers_out.www_authenticate->hash = 2;
-#if defined(nginx_version) && nginx_version >= 1023000
-        r->headers_out.www_authenticate->next = NULL;
-#endif
-        r->headers_out.www_authenticate->key.len =
-            sizeof("WWW-Authenticate") - 1;
-        r->headers_out.www_authenticate->key.data =
-            (u_char *)"WWW-Authenticate";
-        r->headers_out.www_authenticate->value.len = value2.len;
-        r->headers_out.www_authenticate->value.data = value2.data;
     }
 
     ctx->head = 1;
-
     return NGX_OK;
 }
 
