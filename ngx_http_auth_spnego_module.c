@@ -777,20 +777,17 @@ done:
         krb5_free_context(kcontext);
 }
 
-static char *ngx_http_auth_spnego_replace(ngx_http_request_t *r, const char *str,
-                                          char find, char replace) {
-    size_t str_len = ngx_strlen(str);
-    char *result = (char *)ngx_palloc(r->pool, str_len + 1);
-    if (result == NULL) {
+static char *
+ngx_http_auth_spnego_build_ccache_name(ngx_pool_t *pool, krb5_context kcontext,
+                                       krb5_ccache ccache)
+{
+    const char *cc_type = krb5_cc_get_type(kcontext, ccache);
+    const char *cc_name = krb5_cc_get_name(kcontext, ccache);
+    size_t size = ngx_strlen(cc_type) + 1 + ngx_strlen(cc_name) + 1;
+    char *result = ngx_palloc(pool, size);
+    if (result == NULL)
         return NULL;
-    }
-
-    ngx_memcpy(result, str, str_len + 1);
-
-    char *index = NULL;
-    while ((index = ngx_strchr(result, find)) != NULL) {
-        *index = replace;
-    }
+    ngx_snprintf((u_char *)result, size, "%s:%s%Z", cc_type, cc_name);
     return result;
 }
 
@@ -803,7 +800,6 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
     krb5_ccache ccache = NULL;
     krb5_error_code kerr = 0;
     char *ccname = NULL;
-    char *escaped = NULL;
     bool ccname_owned_by_cleanup = false;
 
     if (!delegated_creds.data) {
@@ -827,27 +823,8 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
         goto done;
     }
 
-    escaped =
-        ngx_http_auth_spnego_replace(r, principal_name, '/', '_');
-    if (escaped == NULL) {
-        kerr = ENOMEM;
-        goto done;
-    }
-
-    size_t ccname_size = (ngx_strlen("FILE:") + ngx_strlen(P_tmpdir) +
-                          ngx_strlen("/") + ngx_strlen(escaped)) +
-                         1;
-    ccname = (char *)ngx_pcalloc(r->pool, ccname_size);
-    if (NULL == ccname) {
-        kerr = ENOMEM;
-        goto done;
-    }
-
-    ngx_snprintf((u_char *)ccname, ccname_size, "FILE:%s/%*s", P_tmpdir,
-                 ngx_strlen(escaped), escaped);
-
-    if ((kerr = krb5_cc_resolve(kcontext, ccname, &ccache))) {
-        spnego_log_error("Kerberos error: Cannot resolve ccache %s", ccname);
+    if ((kerr = krb5_cc_new_unique(kcontext, "FILE", NULL, &ccache))) {
+        spnego_log_error("Kerberos error: Cannot create unique ccache");
         spnego_log_krb5_error(kcontext, kerr);
         goto done;
     }
@@ -870,6 +847,12 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
     if (kerr)
         goto done;
 
+    ccname = ngx_http_auth_spnego_build_ccache_name(r->pool, kcontext, ccache);
+    if (NULL == ccname) {
+        kerr = ENOMEM;
+        goto done;
+    }
+
     ngx_str_t var_name = ngx_string(CCACHE_VARIABLE_NAME);
 
     ngx_str_t var_value = ngx_null_string;
@@ -888,14 +871,16 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
     cln->data = ccname;
     ccname_owned_by_cleanup = true;
 done:
-    if (escaped)
-        ngx_pfree(r->pool, escaped);
     if (ccname && !ccname_owned_by_cleanup)
         ngx_pfree(r->pool, ccname);
     if (principal)
         krb5_free_principal(kcontext, principal);
-    if (ccache)
-        krb5_cc_close(kcontext, ccache);
+    if (ccache) {
+        if (ccname_owned_by_cleanup)
+            krb5_cc_close(kcontext, ccache);
+        else
+            krb5_cc_destroy(kcontext, ccache);
+    }
     if (kcontext)
         krb5_free_context(kcontext);
 
@@ -1389,7 +1374,6 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     krb5_creds creds;
     char *principal_name = NULL;
     char *tgs_principal_name = NULL;
-    char cc_name_buf[1024];
     const char *cc_name = NULL;
     OM_uint32 gss_minor;
 
@@ -1415,17 +1399,13 @@ static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
             spnego_log_krb5_error(kcontext, kerr);
             goto done;
         }
-        const char *cc_type = krb5_cc_get_type(kcontext, ccache);
-        const char *cc_nm   = krb5_cc_get_name(kcontext, ccache);
-        size_t needed = ngx_strlen(cc_type) + 1 + ngx_strlen(cc_nm) + 1;
-        if (needed > sizeof(cc_name_buf)) {
-            spnego_log_error("Default ccache name too long (%uz bytes)", needed);
+        cc_name = ngx_http_auth_spnego_build_ccache_name(r->pool, kcontext,
+                                                         ccache);
+        if (cc_name == NULL) {
+            spnego_log_error("Not enough memory for default ccache name");
             kerr = ENOMEM;
             goto done;
         }
-        ngx_snprintf((u_char *)cc_name_buf, sizeof(cc_name_buf), "%s:%s%Z",
-                     cc_type, cc_nm);
-        cc_name = cc_name_buf;
     }
 
     if ((kerr = ngx_http_auth_spnego_verify_server_credentials(
