@@ -75,8 +75,7 @@ static char *ngx_conf_set_regex_array_slot(ngx_conf_t *cf, ngx_command_t *cmd,
 
 ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r);
 
-static
-const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *prefix) {
+static const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *prefix) {
     OM_uint32 maj_stat, min_stat;
     OM_uint32 msg_ctx = 0;
     gss_buffer_desc status_string;
@@ -140,6 +139,9 @@ typedef struct {
     ngx_flag_t delegate_credentials;
     ngx_flag_t constrained_delegation;
 } ngx_http_auth_spnego_loc_conf_t;
+
+static void ngx_http_auth_spnego_strip_realm(ngx_http_request_t *,
+                                             ngx_http_auth_spnego_loc_conf_t *);
 
 #define SPNEGO_NGX_CONF_FLAGS                                                  \
     NGX_HTTP_MAIN_CONF                                                         \
@@ -529,6 +531,27 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
 }
 
 static ngx_int_t
+ngx_http_auth_spnego_add_www_authenticate(ngx_http_request_t *r,
+                                          ngx_str_t *value, ngx_uint_t hash)
+{
+    ngx_table_elt_t *h = ngx_list_push(&r->headers_out.headers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+
+    h->hash = hash;
+#if defined(nginx_version) && nginx_version >= 1023000
+    h->next = NULL;
+#endif
+    h->key.len = sizeof("WWW-Authenticate") - 1;
+    h->key.data = (u_char *)"WWW-Authenticate";
+    h->value = *value;
+
+    r->headers_out.www_authenticate = h;
+    return NGX_OK;
+}
+
+static ngx_int_t
 ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
                                         ngx_http_auth_spnego_ctx_t *ctx,
                                         ngx_http_auth_spnego_loc_conf_t *alcf) {
@@ -539,22 +562,12 @@ ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
         return NGX_ERROR;
     }
     ngx_snprintf(value.data, value.len, "Basic realm=\"%V\"", &alcf->realm);
-    r->headers_out.www_authenticate = ngx_list_push(&r->headers_out.headers);
-    if (NULL == r->headers_out.www_authenticate) {
+
+    if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
         return NGX_ERROR;
     }
 
-    r->headers_out.www_authenticate->hash = 1;
-#if defined(nginx_version) && nginx_version >= 1023000
-    r->headers_out.www_authenticate->next = NULL;
-#endif
-    r->headers_out.www_authenticate->key.len = sizeof("WWW-Authenticate") - 1;
-    r->headers_out.www_authenticate->key.data = (u_char *)"WWW-Authenticate";
-    r->headers_out.www_authenticate->value.len = value.len;
-    r->headers_out.www_authenticate->value.data = value.data;
-
     ctx->head = 1;
-
     return NGX_OK;
 }
 
@@ -578,19 +591,9 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
         ngx_snprintf(value.data, value.len, "Negotiate %V", token);
     }
 
-    r->headers_out.www_authenticate = ngx_list_push(&r->headers_out.headers);
-    if (NULL == r->headers_out.www_authenticate) {
+    if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
         return NGX_ERROR;
     }
-
-    r->headers_out.www_authenticate->hash = 1;
-#if defined(nginx_version) && nginx_version >= 1023000
-    r->headers_out.www_authenticate->next = NULL;
-#endif
-    r->headers_out.www_authenticate->key.len = sizeof("WWW-Authenticate") - 1;
-    r->headers_out.www_authenticate->key.data = (u_char *)"WWW-Authenticate";
-    r->headers_out.www_authenticate->value.len = value.len;
-    r->headers_out.www_authenticate->value.data = value.data;
 
     if (alcf->allow_basic) {
         ngx_str_t value2 = ngx_null_string;
@@ -601,26 +604,13 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
         }
         ngx_snprintf(value2.data, value2.len, "Basic realm=\"%V\"",
                      &alcf->realm);
-        r->headers_out.www_authenticate =
-            ngx_list_push(&r->headers_out.headers);
-        if (NULL == r->headers_out.www_authenticate) {
+
+        if (ngx_http_auth_spnego_add_www_authenticate(r, &value2, 2) != NGX_OK) {
             return NGX_ERROR;
         }
-
-        r->headers_out.www_authenticate->hash = 2;
-#if defined(nginx_version) && nginx_version >= 1023000
-        r->headers_out.www_authenticate->next = NULL;
-#endif
-        r->headers_out.www_authenticate->key.len =
-            sizeof("WWW-Authenticate") - 1;
-        r->headers_out.www_authenticate->key.data =
-            (u_char *)"WWW-Authenticate";
-        r->headers_out.www_authenticate->value.len = value2.len;
-        r->headers_out.www_authenticate->value.data = value2.data;
     }
 
     ctx->head = 1;
-
     return NGX_OK;
 }
 
@@ -667,7 +657,6 @@ ngx_spnego_authorized_principal(ngx_http_request_t *r, ngx_str_t *princ,
     return false;
 }
 
-static
 ngx_int_t ngx_http_auth_spnego_token(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx) {
     ngx_str_t token;
@@ -913,7 +902,37 @@ done:
     return kerr ? NGX_ERROR : NGX_OK;
 }
 
-static
+/*
+ * Return a pointer to the start of the realm part (i.e. after the
+ * first unescaped '@').
+ */
+static u_char *
+ngx_http_auth_spnego_realm_from_str(ngx_str_t s, size_t *realm_len)
+{
+    u_char *p, *at = NULL;
+    u_char prev = 0;
+
+    for (p = s.data; p < s.data + s.len; p++) {
+        if (prev == '\\' && *p == '\\') {
+            prev = 0;
+            continue;
+        } else if (*p == '@' && prev != '\\') {
+            at = p;
+            break;
+        }
+        prev = *p;
+    }
+
+    if (at == NULL)
+        return NULL;
+
+    if (realm_len)
+        *realm_len = (size_t)(s.data + s.len - (at + 1));
+
+    return at + 1;
+}
+
+
 ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx,
                                      ngx_http_auth_spnego_loc_conf_t *alcf) {
@@ -931,7 +950,8 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     krb5_creds creds;
     krb5_get_init_creds_opt *options = NULL;
     char *name = NULL;
-    unsigned char *p = NULL;
+    u_char *realm = NULL;
+    size_t realm_len = 0;
 
     code = krb5_init_context(&kcontext);
     if (code) {
@@ -1000,10 +1020,9 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     free(name);
     name = NULL;
 
-    p = ngx_strlchr(r->headers_in.user.data,
-                    r->headers_in.user.data + r->headers_in.user.len, '@');
+    realm = ngx_http_auth_spnego_realm_from_str(r->headers_in.user, &realm_len);
     user.len = r->headers_in.user.len + 1;
-    if (NULL == p) {
+    if (realm == NULL) {
         if (alcf->force_realm && alcf->realm.len && alcf->realm.data) {
             user.len += alcf->realm.len + 1; /* +1 for @ */
             user.data = ngx_palloc(r->pool, user.len);
@@ -1023,25 +1042,20 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         }
     } else {
         if (alcf->realm.len && alcf->realm.data &&
-            ngx_strncmp(p + 1, alcf->realm.data, alcf->realm.len) == 0) {
+            realm_len == alcf->realm.len &&
+            ngx_strncmp(realm, alcf->realm.data, alcf->realm.len) == 0) {
             user.data = ngx_palloc(r->pool, user.len);
             if (NULL == user.data) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
             ngx_snprintf(user.data, user.len, "%V%Z", &r->headers_in.user);
-            if (alcf->fqun == 0) {
-                /*
-                 * Specified realm is identical to configured realm.
-                 * Truncate $remote_user to strip @REALM.
-                 */
-                r->headers_in.user.len -= alcf->realm.len + 1;
-            }
+            ngx_http_auth_spnego_strip_realm(r, alcf);
         } else if (alcf->force_realm) {
             ngx_str_t short_user;
 
             short_user.data = r->headers_in.user.data;
-            short_user.len = p - r->headers_in.user.data;
+            short_user.len = (realm - 1) - r->headers_in.user.data;
             user.len = short_user.len + 1;
             if (alcf->realm.len && alcf->realm.data)
                 user.len += alcf->realm.len + 1;
@@ -1113,8 +1127,16 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         spnego_error(NGX_ERROR);
     }
 
+    char *passwd = ngx_pnalloc(r->pool, r->headers_in.passwd.len + 1);
+    if (passwd == NULL) {
+        spnego_log_error("Not enough memory");
+        spnego_error(NGX_ERROR);
+    }
+    ngx_memcpy(passwd, r->headers_in.passwd.data, r->headers_in.passwd.len);
+    passwd[r->headers_in.passwd.len] = '\0';
+
     code = krb5_get_init_creds_password(kcontext, &creds, client,
-                                        (char *)r->headers_in.passwd.data, NULL,
+                                        passwd, NULL,
                                         NULL, 0, NULL, options);
     if (code) {
         spnego_log_error("Kerberos error: Credentials failed");
@@ -1130,8 +1152,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     krb5_free_cred_contents(kcontext, &creds);
     /* Try to add the system realm to $remote_user if needed. */
     if (alcf->fqun &&
-        !ngx_strlchr(r->headers_in.user.data,
-                     r->headers_in.user.data + r->headers_in.user.len, '@')) {
+        !ngx_http_auth_spnego_realm_from_str(r->headers_in.user, NULL)) {
         const char *realm_at = strrchr(name, '@');
         const char *realm = (realm_at && realm_at[1]) ? realm_at + 1 : NULL;
         if (realm) {
@@ -1174,6 +1195,27 @@ end:
     krb5_free_context(kcontext);
 
     return ret;
+}
+
+/*
+ * Conditionally strip the configured realm suffix from $remote_user.
+ */
+static void
+ngx_http_auth_spnego_strip_realm(ngx_http_request_t *r,
+                                  ngx_http_auth_spnego_loc_conf_t *alcf)
+{
+    u_char *realm;
+    size_t rlen;
+
+    if (alcf->fqun || !alcf->realm.len || !alcf->realm.data)
+        return;
+
+    realm = ngx_http_auth_spnego_realm_from_str(r->headers_in.user, &rlen);
+    if (realm == NULL || rlen != alcf->realm.len)
+        return;
+
+    if (ngx_strncmp(realm, alcf->realm.data, alcf->realm.len) == 0)
+        r->headers_in.user.len -= alcf->realm.len + 1;
 }
 
 /*
@@ -1493,13 +1535,11 @@ done:
     return kerr ? NGX_ERROR : NGX_OK;
 }
 
-static
 ngx_int_t
 ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
                                    ngx_http_auth_spnego_ctx_t *ctx,
                                    ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_int_t ret = NGX_DECLINED;
-    u_char *pu;
     ngx_str_t spnego_token = ngx_null_string;
     OM_uint32 major_status, minor_status, minor_status2;
     gss_buffer_desc service = GSS_C_EMPTY_BUFFER;
@@ -1662,16 +1702,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
         r->headers_in.user.data = (u_char *)username;
         r->headers_in.user.len = output_token.length;
-        if (alcf->fqun == 0) {
-            pu = ngx_strlchr(r->headers_in.user.data,
-                             r->headers_in.user.data + r->headers_in.user.len,
-                             '@');
-            if (pu != NULL &&
-                ngx_strncmp(pu + 1, alcf->realm.data, alcf->realm.len) == 0) {
-                *pu = '\0';
-                r->headers_in.user.len = ngx_strlen(r->headers_in.user.data);
-            }
-        }
+        ngx_http_auth_spnego_strip_realm(r, alcf);
 
         /* this for the sake of ngx_http_variable_remote_user */
         if (ngx_http_auth_spnego_set_bogus_authorization(r) != NGX_OK) {
@@ -1740,8 +1771,8 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
         return ctx->ret;
     }
 
-    if (NULL != r->headers_in.user.data) {
-        spnego_debug0("User header set");
+    if (ctx->ret == NGX_OK) {
+        spnego_debug0("Already authenticated");
         return NGX_OK;
     }
 
