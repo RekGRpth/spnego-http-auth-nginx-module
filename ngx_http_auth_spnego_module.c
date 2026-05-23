@@ -88,6 +88,10 @@ static char *ngx_conf_set_regex_array_slot(ngx_conf_t *cf, ngx_command_t *cmd,
 #endif
 
 ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r);
+static ngx_int_t ngx_http_auth_spnego_header_filter(ngx_http_request_t *r);
+static ngx_int_t ngx_http_auth_spnego_add_www_authenticate(ngx_http_request_t *r,
+                                                            ngx_str_t *value,
+                                                            ngx_uint_t hash);
 
 static const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *prefix) {
     OM_uint32 maj_stat, min_stat;
@@ -115,6 +119,7 @@ static const char *get_gss_error(ngx_pool_t *p, OM_uint32 error_status, char *pr
 }
 
 static ngx_shm_zone_t *shm_zone;
+static ngx_http_output_header_filter_pt ngx_http_next_header_filter;
 
 typedef enum { TYPE_KRB5_CREDS, TYPE_GSS_CRED_ID_T } creds_type;
 
@@ -551,6 +556,9 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
     ngx_http_handler_pt *h;
     ngx_http_core_main_conf_t *cmcf;
 
+    ngx_http_next_header_filter = ngx_http_top_header_filter;
+    ngx_http_top_header_filter = ngx_http_auth_spnego_header_filter;
+
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
     h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
@@ -566,6 +574,32 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
     }
 
     return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_auth_spnego_header_filter(ngx_http_request_t *r)
+{
+    ngx_http_auth_spnego_ctx_t *ctx;
+    ngx_str_t value;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_auth_spnego_module);
+
+    if (ctx == NULL || ctx->ret != NGX_OK || ctx->token_out_b64.len == 0) {
+        return ngx_http_next_header_filter(r);
+    }
+
+    value.len = sizeof("Negotiate ") - 1 + ctx->token_out_b64.len;
+    value.data = ngx_pnalloc(r->pool, value.len);
+    if (value.data == NULL) {
+        return NGX_ERROR;
+    }
+    ngx_snprintf(value.data, value.len, "Negotiate %V", &ctx->token_out_b64);
+
+    if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    return ngx_http_next_header_filter(r);
 }
 
 static ngx_int_t
@@ -1899,13 +1933,10 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_auth_spnego_module);
     if (NULL == ctx) {
-        ctx = ngx_palloc(r->pool, sizeof(ngx_http_auth_spnego_ctx_t));
+        ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_auth_spnego_ctx_t));
         if (NULL == ctx) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
-        ctx->token.len = 0;
-        ctx->token.data = NULL;
-        ctx->head = 0;
         ctx->ret = NGX_HTTP_UNAUTHORIZED;
         ngx_http_set_ctx(r, ctx, ngx_http_auth_spnego_module);
     }
@@ -1988,25 +2019,24 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
         spnego_debug0("GSSAPI auth succeeded");
     }
 
-    ngx_str_t *token_out_b64 = NULL;
     switch (ret) {
     case NGX_DECLINED: /* DECLINED, but not yet FORBIDDEN */
         ctx->ret = NGX_HTTP_UNAUTHORIZED;
+        if (NGX_ERROR == ngx_http_auth_spnego_headers(r, ctx, NULL, alcf)) {
+            spnego_debug0("Error setting headers");
+            ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
         break;
     case NGX_OK:
         ctx->ret = NGX_OK;
-        token_out_b64 = &ctx->token_out_b64;
+        /* WWW-Authenticate: Negotiate <token> is emitted by the output header
+         * filter, which runs after nginx's satisfy-any WWW-Authenticate
+         * cleanup, so the mutual-auth token survives satisfy any. */
         break;
     case NGX_ERROR:
     default:
         ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR;
         break;
-    }
-
-    if (NGX_ERROR ==
-        ngx_http_auth_spnego_headers(r, ctx, token_out_b64, alcf)) {
-        spnego_debug0("Error setting headers");
-        ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     spnego_debug3("SSO auth handling OUT: token.len=%d, head=%d, ret=%d",
