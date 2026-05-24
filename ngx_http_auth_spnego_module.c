@@ -710,12 +710,13 @@ ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
                                         ngx_http_auth_spnego_ctx_t *ctx,
                                         ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_str_t value = ngx_null_string;
-    value.len = sizeof("Basic realm=\"\"") - 1 + alcf->realm.len;
+    value.len = sizeof("Basic realm=\"\", charset=\"UTF-8\"") - 1 + alcf->realm.len;
     value.data = ngx_pcalloc(r->pool, value.len);
     if (NULL == value.data) {
         return NGX_ERROR;
     }
-    ngx_snprintf(value.data, value.len, "Basic realm=\"%V\"", &alcf->realm);
+    ngx_snprintf(value.data, value.len, "Basic realm=\"%V\", charset=\"UTF-8\"",
+                 &alcf->realm);
 
     if (ngx_http_auth_spnego_add_www_authenticate(r, &value, 1) != NGX_OK) {
         return NGX_ERROR;
@@ -730,12 +731,12 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
                              ngx_http_auth_spnego_ctx_t *ctx, ngx_str_t *token,
                              ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_str_t value = ngx_null_string;
+
     if (NULL == token) {
         value.len = sizeof("Negotiate") - 1;
         value.data = (u_char *)"Negotiate";
     } else {
-        value.len =
-            sizeof("Negotiate") + token->len; /* space accounts for \0 */
+        value.len = sizeof("Negotiate") + token->len; /* space accounts for \0 */
         value.data = ngx_pcalloc(r->pool, value.len);
         if (NULL == value.data) {
             return NGX_ERROR;
@@ -749,12 +750,12 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
 
     if (alcf->allow_basic) {
         ngx_str_t value2 = ngx_null_string;
-        value2.len = sizeof("Basic realm=\"\"") - 1 + alcf->realm.len;
+        value2.len = sizeof("Basic realm=\"\", charset=\"UTF-8\"") - 1 + alcf->realm.len;
         value2.data = ngx_pcalloc(r->pool, value2.len);
         if (NULL == value2.data) {
             return NGX_ERROR;
         }
-        ngx_snprintf(value2.data, value2.len, "Basic realm=\"%V\"",
+        ngx_snprintf(value2.data, value2.len, "Basic realm=\"%V\", charset=\"UTF-8\"",
                      &alcf->realm);
 
         if (ngx_http_auth_spnego_add_www_authenticate(r, &value2, 2) != NGX_OK) {
