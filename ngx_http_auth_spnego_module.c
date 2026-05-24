@@ -731,9 +731,7 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
                              ngx_http_auth_spnego_ctx_t *ctx, ngx_str_t *token,
                              ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_str_t value = ngx_null_string;
-    /* only use token if authorized as there appears to be a bug in
-     * Google Chrome when parsing a 401 Negotiate with a token */
-    if (NULL == token || ctx->ret != NGX_OK) {
+    if (NULL == token) {
         value.len = sizeof("Negotiate") - 1;
         value.data = (u_char *)"Negotiate";
     } else {
