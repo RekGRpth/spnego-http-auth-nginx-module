@@ -2018,9 +2018,6 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
             spnego_debug0("GSSAPI failed");
             return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
         }
-        /* There are chances that client knows about Negotiate
-         * but doesn't support GSSAPI. We could attempt to fall
-         * back to basic here... */
         if (NGX_DECLINED == ret) {
             spnego_debug0("GSSAPI failed");
             if (!alcf->allow_basic) {
