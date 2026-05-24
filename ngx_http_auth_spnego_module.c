@@ -137,27 +137,26 @@ typedef struct {
 } ngx_http_auth_spnego_ctx_t;
 
 typedef struct {
-    ngx_flag_t protect;
-    ngx_str_t realm;
-    ngx_str_t keytab;
-    char *keytab_prefix_path;  /* "FILE:"-prefixed path, built at config time */
-    char *keytab_path;         /* plain path: keytab_prefix_path + 5 */
-    ngx_str_t service_ccache;
-    char *service_ccache_prefix_path; /* "FILE:"-prefixed, built at config time;
-                                         NULL when service_ccache is not set */
-    ngx_str_t srvcname;
+    ngx_flag_t protect;               /* auth_gss on/off */
+    ngx_str_t realm;                  /* Kerberos realm */
+    ngx_str_t keytab;                 /* keytab path (config value) */
+    char *keytab_path;                /* keytab path */
+    char *keytab_prefix_path;         /* "FILE:"-prefixed keytab path */
+    ngx_str_t service_ccache;         /* ccache path for service TGT */
+    char *service_ccache_prefix_path; /* "FILE:"-prefixed ccache path */
+    ngx_str_t srvcname;               /* service principal name override */
     char *service_principal;          /* fully-qualified service principal */
-    ngx_str_t shm_zone_name;
-    ngx_flag_t fqun;
-    ngx_flag_t force_realm;
-    ngx_flag_t allow_basic;
-    ngx_array_t *auth_princs;
+    ngx_str_t shm_zone_name;          /* shared memory zone for cross-worker mutex */
+    ngx_flag_t fqun;                  /* include @realm in $remote_user */
+    ngx_flag_t force_realm;           /* strip/replace principal's realm */
+    ngx_flag_t allow_basic;           /* allow Basic auth fallback */
+    ngx_array_t *auth_princs;         /* authorized principals */
 #if (NGX_PCRE)
-    ngx_array_t *auth_princs_regex;
+    ngx_array_t *auth_princs_regex;   /* regexes matching authorized principals */
 #endif
-    ngx_flag_t map_to_local;
-    ngx_flag_t delegate_credentials;
-    ngx_flag_t constrained_delegation;
+    ngx_flag_t map_to_local;          /* map principal to local name via gss_localname() */
+    ngx_flag_t delegate_credentials;  /* enable credential delegation */
+    ngx_flag_t constrained_delegation; /* use S4U2Proxy constrained delegation */
     ngx_uint_t channel_binding;       /* NGX_HTTP_AUTH_SPNEGO_CB_* */
 } ngx_http_auth_spnego_loc_conf_t;
 
