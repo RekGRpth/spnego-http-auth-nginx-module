@@ -820,7 +820,7 @@ ngx_int_t ngx_http_auth_spnego_token(ngx_http_request_t *r,
         return NGX_DECLINED;
     }
 
-    /* but don't decode second time? */
+    /* defensive guard: skip re-decoding */
     if (ctx->token.len)
         return NGX_OK;
 
