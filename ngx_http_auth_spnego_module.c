@@ -1586,7 +1586,7 @@ ngx_http_auth_spnego_build_channel_binding(ngx_http_request_t *r,
             return GSS_C_NO_CHANNEL_BINDINGS;
 
         u_char *p = ngx_cpymem(app_data, prefix, sizeof(prefix) - 1);
-        ngx_cpymem(p, exported, sizeof(exported));
+        ngx_memcpy(p, exported, sizeof(exported));
 
     } else if (type == NGX_HTTP_AUTH_SPNEGO_CB_SERVER_EP) {
         static const char  prefix[]    = "tls-server-end-point:";
@@ -1641,7 +1641,7 @@ ngx_http_auth_spnego_build_channel_binding(ngx_http_request_t *r,
             return GSS_C_NO_CHANNEL_BINDINGS;
 
         u_char *p = ngx_cpymem(app_data, prefix, sizeof(prefix) - 1);
-        ngx_cpymem(p, hash, hash_len);
+        ngx_memcpy(p, hash, hash_len);
 
     } else {
         return GSS_C_NO_CHANNEL_BINDINGS;
