@@ -32,13 +32,27 @@
 #include <ngx_http.h>
 
 #include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>
 #include <gssapi/gssapi_krb5.h>
 #include <krb5.h>
 #include <stdbool.h>
 
+#if (NGX_HTTP_SSL)
+#include <ngx_event_openssl.h>
+#include <openssl/evp.h>
+#include <openssl/objects.h>
+#include <openssl/x509.h>
+#endif
+
 #define CCACHE_VARIABLE_NAME "krb5_cc_name"
 #define SHM_ZONE_NAME "shm_zone"
 #define RENEWAL_TIME 60
+
+/* Values for the auth_gss_channel_binding directive. */
+#define NGX_HTTP_AUTH_SPNEGO_CB_OFF       0
+#define NGX_HTTP_AUTH_SPNEGO_CB_SERVER_EP 1
+#define NGX_HTTP_AUTH_SPNEGO_CB_EXPORTER  2
+
 
 #define spnego_log_krb5_error(context, code)                                   \
     {                                                                          \
@@ -138,6 +152,7 @@ typedef struct {
     ngx_flag_t map_to_local;
     ngx_flag_t delegate_credentials;
     ngx_flag_t constrained_delegation;
+    ngx_uint_t channel_binding;       /* NGX_HTTP_AUTH_SPNEGO_CB_* */
 } ngx_http_auth_spnego_loc_conf_t;
 
 static void ngx_http_auth_spnego_strip_realm(ngx_http_request_t *,
@@ -146,6 +161,15 @@ static void ngx_http_auth_spnego_strip_realm(ngx_http_request_t *,
 #define SPNEGO_NGX_CONF_FLAGS                                                  \
     NGX_HTTP_MAIN_CONF                                                         \
     | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF | NGX_HTTP_LMT_CONF | NGX_CONF_FLAG
+
+static const ngx_conf_enum_t ngx_http_auth_spnego_cb[] = {
+    { ngx_string("off"),              NGX_HTTP_AUTH_SPNEGO_CB_OFF },
+#if (NGX_HTTP_SSL)
+    { ngx_string("server-end-point"), NGX_HTTP_AUTH_SPNEGO_CB_SERVER_EP },
+    { ngx_string("exporter"),         NGX_HTTP_AUTH_SPNEGO_CB_EXPORTER },
+#endif
+    { ngx_null_string, 0 }
+};
 
 /* Module Directives */
 static ngx_command_t ngx_http_auth_spnego_commands[] = {
@@ -206,6 +230,13 @@ static ngx_command_t ngx_http_auth_spnego_commands[] = {
     {ngx_string("auth_gss_constrained_delegation"), SPNEGO_NGX_CONF_FLAGS,
      ngx_conf_set_flag_slot, NGX_HTTP_LOC_CONF_OFFSET,
      offsetof(ngx_http_auth_spnego_loc_conf_t, constrained_delegation), NULL},
+
+    {ngx_string("auth_gss_channel_binding"),
+     NGX_HTTP_MAIN_CONF | NGX_HTTP_SRV_CONF | NGX_HTTP_LOC_CONF
+         | NGX_HTTP_LMT_CONF | NGX_CONF_TAKE1,
+     ngx_conf_set_enum_slot, NGX_HTTP_LOC_CONF_OFFSET,
+     offsetof(ngx_http_auth_spnego_loc_conf_t, channel_binding),
+     (void *) &ngx_http_auth_spnego_cb},
 
     ngx_null_command};
 
@@ -309,6 +340,7 @@ static void *ngx_http_auth_spnego_create_loc_conf(ngx_conf_t *cf) {
     conf->map_to_local = NGX_CONF_UNSET;
     conf->delegate_credentials = NGX_CONF_UNSET;
     conf->constrained_delegation = NGX_CONF_UNSET;
+    conf->channel_binding = NGX_CONF_UNSET_UINT;
 
     return conf;
 }
@@ -404,6 +436,9 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
                              prev->delegate_credentials, 0);
     ngx_conf_merge_off_value(conf->constrained_delegation,
                              prev->constrained_delegation, 0);
+    ngx_conf_merge_uint_value(conf->channel_binding,
+                              prev->channel_binding,
+                              NGX_HTTP_AUTH_SPNEGO_CB_OFF);
 
 #if (NGX_DEBUG)
     ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0, "auth_spnego: protect = %i",
@@ -457,6 +492,9 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
     ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0,
                        "auth_spnego: constrained_delegation = %i",
                        conf->constrained_delegation);
+    ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0,
+                       "auth_spnego: channel_binding = %ui",
+                       conf->channel_binding);
 #endif
 
     return NGX_CONF_OK;
@@ -1515,13 +1553,118 @@ done:
     return kerr ? NGX_ERROR : NGX_OK;
 }
 
+#if (NGX_HTTP_SSL)
+/*
+ * Build a gss_channel_bindings_t for the selected channel binding type.
+ *
+ * Returns GSS_C_NO_CHANNEL_BINDINGS on error; to be treated as a hard failure.
+ */
+static gss_channel_bindings_t
+ngx_http_auth_spnego_build_channel_binding(ngx_http_request_t *r,
+                                            ngx_uint_t type)
+{
+    SSL                    *ssl = r->connection->ssl->connection;
+    gss_channel_bindings_t  cb;
+    unsigned char          *app_data;
+    size_t                  app_data_len;
+
+    if (type == NGX_HTTP_AUTH_SPNEGO_CB_EXPORTER) {
+        static const char  prefix[] = "tls-exporter:";
+        unsigned char      exported[32];
+
+        if (SSL_export_keying_material(ssl, exported, sizeof(exported),
+                                       "EXPORTER-Channel-Binding",
+                                       sizeof("EXPORTER-Channel-Binding") - 1,
+                                       NULL, 0, 1) != 1) {
+            spnego_log_error("SSL_export_keying_material() failed");
+            return GSS_C_NO_CHANNEL_BINDINGS;
+        }
+
+        app_data_len = (sizeof(prefix) - 1) + sizeof(exported);
+        app_data     = ngx_palloc(r->pool, app_data_len);
+        if (app_data == NULL)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+
+        u_char *p = ngx_cpymem(app_data, prefix, sizeof(prefix) - 1);
+        ngx_cpymem(p, exported, sizeof(exported));
+
+    } else if (type == NGX_HTTP_AUTH_SPNEGO_CB_SERVER_EP) {
+        static const char  prefix[]    = "tls-server-end-point:";
+        X509              *cert;
+        const EVP_MD      *md;
+        EVP_MD_CTX        *mdctx;
+        unsigned char     *der, *der_p;
+        unsigned char      hash[EVP_MAX_MD_SIZE];
+        unsigned int       hash_len;
+        int                der_len, sig_hash_nid;
+
+        cert = SSL_get_certificate(ssl);
+        if (cert == NULL)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+
+        /* RFC 5929 §4: use cert's sig-hash unless it's MD5/SHA-1 */
+        md = EVP_sha256();
+        if (OBJ_find_sigid_algs(X509_get_signature_nid(cert),
+                                &sig_hash_nid, NULL)
+            && sig_hash_nid != NID_md5 && sig_hash_nid != NID_sha1)
+        {
+            const EVP_MD *candidate = EVP_get_digestbynid(sig_hash_nid);
+            if (candidate != NULL)
+                md = candidate;
+        }
+
+        der_len = i2d_X509(cert, NULL);
+        if (der_len <= 0)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+
+        der = der_p = ngx_palloc(r->pool, der_len);
+        if (der == NULL)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+        i2d_X509(cert, &der_p);
+
+        mdctx = EVP_MD_CTX_new();
+        if (mdctx == NULL)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+        if (EVP_DigestInit_ex(mdctx, md, NULL) != 1 ||
+            EVP_DigestUpdate(mdctx, der, der_len) != 1 ||
+            EVP_DigestFinal_ex(mdctx, hash, &hash_len) != 1) {
+            spnego_log_error("EVP digest failed computing "
+                             "tls-server-end-point channel binding");
+            EVP_MD_CTX_free(mdctx);
+            return GSS_C_NO_CHANNEL_BINDINGS;
+        }
+        EVP_MD_CTX_free(mdctx);
+
+        app_data_len = (sizeof(prefix) - 1) + hash_len;
+        app_data     = ngx_palloc(r->pool, app_data_len);
+        if (app_data == NULL)
+            return GSS_C_NO_CHANNEL_BINDINGS;
+
+        u_char *p = ngx_cpymem(app_data, prefix, sizeof(prefix) - 1);
+        ngx_cpymem(p, hash, hash_len);
+
+    } else {
+        return GSS_C_NO_CHANNEL_BINDINGS;
+    }
+
+    cb = ngx_pcalloc(r->pool, sizeof(struct gss_channel_bindings_struct));
+    if (cb == NULL)
+        return GSS_C_NO_CHANNEL_BINDINGS;
+
+    cb->application_data.length = app_data_len;
+    cb->application_data.value  = app_data;
+
+    return cb;
+}
+#endif /* NGX_HTTP_SSL */
+
 ngx_int_t
 ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
                                    ngx_http_auth_spnego_ctx_t *ctx,
                                    ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_int_t ret = NGX_DECLINED;
     ngx_str_t spnego_token = ngx_null_string;
-    OM_uint32 major_status, minor_status, minor_status2;
+    OM_uint32 major_status, minor_status, minor_status2, ret_flags;
     gss_buffer_desc service = GSS_C_EMPTY_BUFFER;
     gss_name_t my_gss_name = GSS_C_NO_NAME;
 
@@ -1532,6 +1675,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     gss_ctx_id_t gss_context = GSS_C_NO_CONTEXT;
     gss_name_t client_name = GSS_C_NO_NAME;
     gss_buffer_desc output_token = GSS_C_EMPTY_BUFFER;
+    gss_channel_bindings_t cb;
 
     if (NULL == ctx || ctx->token.len == 0)
         return ret;
@@ -1610,10 +1754,27 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     input_token.length = ctx->token.len;
     input_token.value = (void *)ctx->token.data;
 
+    cb = GSS_C_NO_CHANNEL_BINDINGS;
+    if (alcf->channel_binding != NGX_HTTP_AUTH_SPNEGO_CB_OFF) {
+#if (NGX_HTTP_SSL)
+        if (r->connection->ssl == NULL) {
+            spnego_log_error("auth_gss_channel_binding configured but "
+                             "connection is not via TLS");
+            spnego_error(NGX_ERROR);
+        }
+        cb = ngx_http_auth_spnego_build_channel_binding(r, alcf->channel_binding);
+        if (cb == GSS_C_NO_CHANNEL_BINDINGS) {
+            spnego_log_error("failed to build channel binding");
+            spnego_error(NGX_ERROR);
+        }
+#endif
+    }
+
     major_status = gss_accept_sec_context(
         &minor_status, &gss_context, my_gss_creds, &input_token,
-        GSS_C_NO_CHANNEL_BINDINGS, &client_name, NULL, &output_token, NULL,
-        NULL, &delegated_creds);
+        cb, &client_name, NULL, &output_token,
+        &ret_flags, NULL, &delegated_creds);
+
     if (GSS_ERROR(major_status)) {
         spnego_debug1("%s", get_gss_error(r->pool, minor_status,
                                           "gss_accept_sec_context() failed"));
@@ -1622,6 +1783,12 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
     if (major_status & GSS_S_CONTINUE_NEEDED) {
         spnego_debug0("only one authentication iteration allowed");
+        spnego_error(NGX_DECLINED);
+    }
+
+    if (alcf->channel_binding != NGX_HTTP_AUTH_SPNEGO_CB_OFF
+        && !(ret_flags & GSS_C_CHANNEL_BOUND_FLAG)) {
+        spnego_log_error("channel binding required but not provided by client");
         spnego_error(NGX_DECLINED);
     }
 

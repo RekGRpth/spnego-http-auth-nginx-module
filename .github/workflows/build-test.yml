@@ -34,7 +34,7 @@ jobs:
             slapd ldap-utils                                                  \
             krb5-admin-server krb5-kdc krb5-kdc-ldap                          \
             libsasl2-modules-gssapi-mit                                       \
-            php-fpm php-ldap
+            php-fpm php-ldap openssl
 
       - name: Check out repository code
         uses: actions/checkout@v5
