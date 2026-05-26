@@ -479,6 +479,17 @@ server {
                 fastcgi_param HTTP_AUTHORIZATION "";
                 auth_gss_channel_binding server-end-point;
 	}
+
+	# satisfy any: verifies that the mutual-auth WWW-Authenticate: Negotiate
+	# <token> survives nginx's satisfy-any header cleanup.
+	location /satisfyany {
+		satisfy any;
+		auth_gss on;
+		auth_gss_realm ${KERBEROS_REALM};
+		auth_gss_keytab /etc/krb5.http.keytab;
+		auth_gss_service_name HTTP/${TEST_HOST_FQDN};
+		auth_gss_allow_basic_fallback off;
+	}
 }
 
 # HTTPS server for channel binding tests.
@@ -662,6 +673,8 @@ fi
 echo "OK"
 
 
+printf "Writing satisfyany static file ... "
+echo "OK" > /var/www/kerberos/satisfyany && echo "OK" || die
 # For example, if php-fpm was already running when libsasl2-modules-gssapi-mit
 # was installed, it won't pick up the new GSSAPI capabilities until it has been
 # restarted...so let's restart all services that might use SASL/GSSAPI in our
@@ -830,6 +843,28 @@ test_ldapwhoami()
 	fi
 }
 
+test_negotiate_token()
+{
+	SUBURL="$1"
+	TMPHEADERS="$(mktemp)"
+
+	printf "curl %s, negotiate: WWW-Authenticate token in 200=" "${SUBURL}"
+	rm -f "${CURL_OUTPUT}"
+	$CURL_NEGOTIATE -D "${TMPHEADERS}" -o "${CURL_OUTPUT}" \
+		"http://${TEST_HOST_FQDN}:8080/${SUBURL}" || true
+
+	# -D captures headers from all responses (401 then 200); the 401 has
+	# "Negotiate" with no token, the 200 should have "Negotiate <token>".
+	# Match only lines that have at least one base64 character after the space.
+	if grep -qi "^WWW-Authenticate: Negotiate [A-Za-z0-9+/]" "${TMPHEADERS}"; then
+		echo "OK"
+	else
+		EX=1
+		echo "FAILED"
+	fi
+	rm -f "${TMPHEADERS}"
+}
+
 
 printf "Destroying Kerberos tickets ... "
 kdestroy -q > /dev/null 2>&1 || true
@@ -855,6 +890,8 @@ test_path "noauth.php" 200 200
 test_path "auth.php" 401 200
 test_path "delegate.php" 401 200
 test_ldapwhoami "alice"
+test_path "satisfyany" 401 200
+test_negotiate_token "satisfyany"
 
 
 echo ""
