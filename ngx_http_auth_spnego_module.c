@@ -1198,7 +1198,11 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
     if (code) {
         spnego_log_error("Kerberos error: Credentials failed");
         spnego_log_krb5_error(kcontext, code);
-        spnego_error(NGX_DECLINED);
+        if (code == KRB5KDC_ERR_PREAUTH_FAILED
+            || code == KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN) {
+            spnego_error(NGX_DECLINED);
+        }
+        spnego_error(NGX_ERROR);
     }
 
     if (alcf->delegate_credentials) {
@@ -1920,6 +1924,7 @@ end:
     return ret;
 }
 
+
 static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
     ngx_int_t ret = NGX_DECLINED;
     ngx_http_auth_spnego_ctx_t *ctx;
@@ -1971,6 +1976,7 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
                     spnego_debug0("Error setting headers");
                     return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
                 }
+
                 return (ctx->ret = NGX_HTTP_UNAUTHORIZED);
             }
 
@@ -2008,7 +2014,9 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
                 spnego_debug0("Error setting headers");
                 return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
             }
-            return (ctx->ret = NGX_HTTP_UNAUTHORIZED);
+            /* finalize directly to bypass core auth_delay (not a credential failure) */
+            ngx_http_finalize_request(r, NGX_HTTP_UNAUTHORIZED);
+            return (ctx->ret = NGX_DONE);
         }
 
         if (!ngx_spnego_authorized_principal(r, &r->headers_in.user, alcf)) {
@@ -2021,10 +2029,13 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
 
     switch (ret) {
     case NGX_DECLINED: /* DECLINED, but not yet FORBIDDEN */
-        ctx->ret = NGX_HTTP_UNAUTHORIZED;
         if (NGX_ERROR == ngx_http_auth_spnego_headers(r, ctx, NULL, alcf)) {
             spnego_debug0("Error setting headers");
             ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        } else {
+            /* finalize directly to bypass core auth_delay (not a credential failure) */
+            ngx_http_finalize_request(r, NGX_HTTP_UNAUTHORIZED);
+            ctx->ret = NGX_DONE;
         }
         break;
     case NGX_OK:

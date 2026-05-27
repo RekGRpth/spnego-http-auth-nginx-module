@@ -133,6 +133,8 @@ These options affect the operation of basic authentication:
   This will rewrite $remote_user if the client provided a different realm.  If
   *auth_gss_format_full* is not set, $remote_user will not include a realm even
   if one was specified by the client.
+* The nginx core [`auth_delay`](https://nginx.org/en/docs/http/ngx_http_core_module.html#auth_delay)
+  directive is honored when an incorrect username/password is provided.
 
 
 Channel Bindings
