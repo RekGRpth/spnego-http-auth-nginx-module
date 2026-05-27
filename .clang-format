@@ -4,10 +4,10 @@ Language:        Cpp
 AccessModifierOffset: -2
 AlignAfterOpenBracket: Align
 AlignArrayOfStructures: None
-AlignConsecutiveMacros: None
+AlignConsecutiveMacros: Consecutive
 AlignConsecutiveAssignments: None
 AlignConsecutiveBitFields: None
-AlignConsecutiveDeclarations: None
+AlignConsecutiveDeclarations: Consecutive
 AlignEscapedNewlines: Right
 AlignOperands:   Align
 AlignTrailingComments: true
@@ -17,12 +17,12 @@ AllowAllParametersOfDeclarationOnNextLine: true
 AllowShortEnumsOnASingleLine: true
 AllowShortBlocksOnASingleLine: Never
 AllowShortCaseLabelsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: All
+AllowShortFunctionsOnASingleLine: None
 AllowShortLambdasOnASingleLine: All
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakAfterDefinitionReturnType: None
-AlwaysBreakAfterReturnType: None
+AlwaysBreakAfterReturnType: AllDefinitions
 AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: MultiLine
 AttributeMacros:
@@ -32,9 +32,9 @@ BinPackParameters: true
 BraceWrapping:
   AfterCaseLabel:  false
   AfterClass:      false
-  AfterControlStatement: Never
+  AfterControlStatement: MultiLine
   AfterEnum:       false
-  AfterFunction:   false
+  AfterFunction:   true
   AfterNamespace:  false
   AfterObjCDeclaration: false
   AfterStruct:     false
@@ -48,9 +48,9 @@ BraceWrapping:
   SplitEmptyFunction: true
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
-BreakBeforeBinaryOperators: None
+BreakBeforeBinaryOperators: NonAssignment
 BreakBeforeConceptDeclarations: true
-BreakBeforeBraces: Attach
+BreakBeforeBraces: Custom
 BreakBeforeInheritanceComma: false
 BreakInheritanceList: BeforeColon
 BreakBeforeTernaryOperators: true
@@ -64,7 +64,7 @@ CompactNamespaces: false
 ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ConstructorInitializerIndentWidth: 4
 ContinuationIndentWidth: 4
-Cpp11BracedListStyle: true
+Cpp11BracedListStyle: false
 DeriveLineEnding: true
 DerivePointerAlignment: false
 DisableFormat:   false
@@ -97,7 +97,7 @@ IncludeIsMainSourceRegex: ''
 IndentAccessModifiers: false
 IndentCaseLabels: false
 IndentCaseBlocks: false
-IndentGotoLabels: true
+IndentGotoLabels: false
 IndentPPDirectives: None
 IndentExternBlock: AfterExternBlock
 IndentRequires:  false
@@ -110,7 +110,7 @@ KeepEmptyLinesAtTheStartOfBlocks: true
 LambdaBodyIndentation: Signature
 MacroBlockBegin: ''
 MacroBlockEnd:   ''
-MaxEmptyLinesToKeep: 1
+MaxEmptyLinesToKeep: 2
 NamespaceIndentation: None
 ObjCBinPackProtocolList: Auto
 ObjCBlockIndentWidth: 2
@@ -134,7 +134,7 @@ ShortNamespaceLines: 1
 SortIncludes:    CaseSensitive
 SortJavaStaticImport: Before
 SortUsingDeclarations: true
-SpaceAfterCStyleCast: false
+SpaceAfterCStyleCast: true
 SpaceAfterLogicalNot: false
 SpaceAfterTemplateKeyword: true
 SpaceBeforeAssignmentOperators: true
