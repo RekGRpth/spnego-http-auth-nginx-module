@@ -139,6 +139,37 @@ These options affect the operation of basic authentication:
   directive is honored when an incorrect username/password is provided.
 
 
+Optional Authentication
+-----------------------
+
+The SPNEGO protocol always begins with a 401 challenge from the server.
+Clients that lack Kerberos support, or choose not to authenticate, will
+stop at that 401 and never make a second request.  The nginx
+[`error_page`](https://nginx.org/en/docs/http/ngx_http_core_module.html#error_page)
+directive can be used to serve meaningful content on that 401 response —
+for instance, a login form provided by the same backend that handles
+authenticated requests.  The backend receives the request with
+`$remote_user` unset and can present a login form accordingly.
+
+    location /app.php {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        auth_gss on;
+        # ... other auth_gss directives ...
+        error_page 401 @unauthenticated;
+    }
+
+    location @unauthenticated {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$uri;
+    }
+
+Placing `error_page 401 @unauthenticated` in the `server` block rather
+than in individual `location` blocks causes it to apply to all locations
+that do not override it.
+
+
 Channel Bindings
 ----------------
 
