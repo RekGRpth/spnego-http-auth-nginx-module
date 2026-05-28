@@ -330,7 +330,7 @@ static void *ngx_http_auth_spnego_create_loc_conf(ngx_conf_t *cf) {
     ngx_http_auth_spnego_loc_conf_t *conf;
 
     conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_auth_spnego_loc_conf_t));
-    if (NULL == conf) {
+    if (conf == NULL) {
         return NULL;
     }
 
@@ -587,11 +587,13 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
     return NGX_CONF_OK;
 }
 
+
 static ngx_int_t ngx_http_auth_spnego_get_handler(ngx_http_request_t *r,
                                                   ngx_http_variable_value_t *v,
                                                   uintptr_t data) {
     return NGX_OK;
 }
+
 
 static ngx_int_t ngx_http_auth_spnego_set_variable(ngx_http_request_t *r,
                                                    ngx_str_t *name,
@@ -618,6 +620,7 @@ static ngx_int_t ngx_http_auth_spnego_set_variable(ngx_http_request_t *r,
     return NGX_OK;
 }
 
+
 static ngx_int_t ngx_http_auth_spnego_add_variable(ngx_conf_t *cf,
                                                    ngx_str_t *name) {
     ngx_http_variable_t *var =
@@ -633,6 +636,7 @@ static ngx_int_t ngx_http_auth_spnego_add_variable(ngx_conf_t *cf,
     return NGX_OK;
 }
 
+
 static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
     ngx_http_handler_pt *h;
     ngx_http_core_main_conf_t *cmcf;
@@ -643,7 +647,7 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
     h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
-    if (NULL == h) {
+    if (h == NULL) {
         return NGX_ERROR;
     }
 
@@ -656,6 +660,7 @@ static ngx_int_t ngx_http_auth_spnego_init(ngx_conf_t *cf) {
 
     return NGX_OK;
 }
+
 
 static ngx_int_t
 ngx_http_auth_spnego_header_filter(ngx_http_request_t *r)
@@ -683,6 +688,7 @@ ngx_http_auth_spnego_header_filter(ngx_http_request_t *r)
     return ngx_http_next_header_filter(r);
 }
 
+
 static ngx_int_t
 ngx_http_auth_spnego_add_www_authenticate(ngx_http_request_t *r,
                                           ngx_str_t *value, ngx_uint_t hash)
@@ -704,6 +710,7 @@ ngx_http_auth_spnego_add_www_authenticate(ngx_http_request_t *r,
     return NGX_OK;
 }
 
+
 static ngx_int_t
 ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
                                         ngx_http_auth_spnego_ctx_t *ctx,
@@ -711,7 +718,7 @@ ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
     ngx_str_t value = ngx_null_string;
     value.len = sizeof("Basic realm=\"\", charset=\"UTF-8\"") - 1 + alcf->realm.len;
     value.data = ngx_pcalloc(r->pool, value.len);
-    if (NULL == value.data) {
+    if (value.data == NULL) {
         return NGX_ERROR;
     }
     ngx_snprintf(value.data, value.len, "Basic realm=\"%V\", charset=\"UTF-8\"",
@@ -725,19 +732,20 @@ ngx_http_auth_spnego_headers_basic_only(ngx_http_request_t *r,
     return NGX_OK;
 }
 
+
 static ngx_int_t
 ngx_http_auth_spnego_headers(ngx_http_request_t *r,
                              ngx_http_auth_spnego_ctx_t *ctx, ngx_str_t *token,
                              ngx_http_auth_spnego_loc_conf_t *alcf) {
     ngx_str_t value = ngx_null_string;
 
-    if (NULL == token) {
+    if (token == NULL) {
         value.len = sizeof("Negotiate") - 1;
         value.data = (u_char *)"Negotiate";
     } else {
         value.len = sizeof("Negotiate") + token->len; /* \0 used for space */
         value.data = ngx_pcalloc(r->pool, value.len);
-        if (NULL == value.data) {
+        if (value.data == NULL) {
             return NGX_ERROR;
         }
         ngx_snprintf(value.data, value.len, "Negotiate %V", token);
@@ -765,6 +773,7 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
     ctx->head = 1;
     return NGX_OK;
 }
+
 
 static bool
 ngx_spnego_authorized_principal(ngx_http_request_t *r, ngx_str_t *princ,
@@ -809,13 +818,14 @@ ngx_spnego_authorized_principal(ngx_http_request_t *r, ngx_str_t *princ,
     return false;
 }
 
+
 ngx_int_t ngx_http_auth_spnego_token(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx) {
     ngx_str_t token;
     ngx_str_t decoded;
     size_t nego_sz = sizeof("Negotiate");
 
-    if (NULL == r->headers_in.authorization) {
+    if (r->headers_in.authorization == NULL) {
         return NGX_DECLINED;
     }
 
@@ -848,7 +858,7 @@ ngx_int_t ngx_http_auth_spnego_token(ngx_http_request_t *r,
 
     decoded.len = ngx_base64_decoded_length(token.len);
     decoded.data = ngx_pnalloc(r->pool, decoded.len);
-    if (NULL == decoded.data) {
+    if (decoded.data == NULL) {
         return NGX_ERROR;
     }
 
@@ -862,6 +872,7 @@ ngx_int_t ngx_http_auth_spnego_token(ngx_http_request_t *r,
 
     return NGX_OK;
 }
+
 
 static krb5_error_code ngx_http_auth_spnego_store_krb5_creds(
     ngx_http_request_t *r, krb5_context kcontext, krb5_principal principal,
@@ -882,6 +893,7 @@ static krb5_error_code ngx_http_auth_spnego_store_krb5_creds(
 
     return kerr;
 }
+
 
 static krb5_error_code ngx_http_auth_spnego_store_gss_creds(
     ngx_http_request_t *r, krb5_context kcontext, krb5_principal principal,
@@ -908,6 +920,7 @@ static krb5_error_code ngx_http_auth_spnego_store_gss_creds(
     return kerr;
 }
 
+
 static void ngx_http_auth_spnego_krb5_destroy_ccache(void *data) {
     krb5_context kcontext = NULL;
     krb5_ccache ccache = NULL;
@@ -929,6 +942,7 @@ done:
         krb5_free_context(kcontext);
 }
 
+
 static char *
 ngx_http_auth_spnego_build_ccache_name(ngx_pool_t *pool, krb5_context kcontext,
                                        krb5_ccache ccache)
@@ -942,6 +956,7 @@ ngx_http_auth_spnego_build_ccache_name(ngx_pool_t *pool, krb5_context kcontext,
     ngx_snprintf((u_char *)result, size, "%s:%s%Z", cc_type, cc_name);
     return result;
 }
+
 
 static ngx_int_t
 ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
@@ -1000,7 +1015,7 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
         goto done;
 
     ccname = ngx_http_auth_spnego_build_ccache_name(r->pool, kcontext, ccache);
-    if (NULL == ccname) {
+    if (ccname == NULL) {
         kerr = ENOMEM;
         goto done;
     }
@@ -1014,7 +1029,7 @@ ngx_http_auth_spnego_store_delegated_creds(ngx_http_request_t *r,
     ngx_http_auth_spnego_set_variable(r, &var_name, &var_value);
 
     ngx_pool_cleanup_t *cln = ngx_pool_cleanup_add(r->pool, 0);
-    if (NULL == cln) {
+    if (cln == NULL) {
         kerr = ENOMEM;
         goto done;
     }
@@ -1068,6 +1083,7 @@ ngx_http_auth_spnego_realm_from_str(ngx_str_t s, size_t *realm_len)
 }
 
 
+
 ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx,
                                      ngx_http_auth_spnego_loc_conf_t *alcf) {
@@ -1116,7 +1132,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         if (alcf->force_realm && alcf->realm.len && alcf->realm.data) {
             user.len += alcf->realm.len + 1; /* +1 for @ */
             user.data = ngx_palloc(r->pool, user.len);
-            if (NULL == user.data) {
+            if (user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1124,7 +1140,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                          &alcf->realm);
         } else {
             user.data = ngx_palloc(r->pool, user.len);
-            if (NULL == user.data) {
+            if (user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1135,7 +1151,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
             realm_len == alcf->realm.len &&
             ngx_strncmp(realm, alcf->realm.data, alcf->realm.len) == 0) {
             user.data = ngx_palloc(r->pool, user.len);
-            if (NULL == user.data) {
+            if (user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1150,7 +1166,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
             if (alcf->realm.len && alcf->realm.data)
                 user.len += alcf->realm.len + 1;
             user.data = ngx_pcalloc(r->pool, user.len);
-            if (NULL == user.data) {
+            if (user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1170,7 +1186,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
             else {
                 new_user.len = user.len - 1;
                 new_user.data = ngx_palloc(r->pool, new_user.len);
-                if (NULL == new_user.data) {
+                if (new_user.data == NULL) {
                     spnego_log_error("Not enough memory");
                     spnego_error(NGX_ERROR);
                 }
@@ -1181,7 +1197,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                        r->headers_in.user.len);
         } else {
             user.data = ngx_palloc(r->pool, user.len);
-            if (NULL == user.data) {
+            if (user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1251,7 +1267,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         if (realm) {
             new_user.len = r->headers_in.user.len + 1 + ngx_strlen(realm);
             new_user.data = ngx_palloc(r->pool, new_user.len);
-            if (NULL == new_user.data) {
+            if (new_user.data == NULL) {
                 spnego_log_error("Not enough memory");
                 spnego_error(NGX_ERROR);
             }
@@ -1326,7 +1342,7 @@ ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r) {
     /* +1 because of the ":" in "user:password" */
     plain.len = r->headers_in.user.len + ngx_strlen(bogus_passwd) + 1;
     plain.data = ngx_pnalloc(r->pool, plain.len);
-    if (NULL == plain.data) {
+    if (plain.data == NULL) {
         return NGX_ERROR;
     }
 
@@ -1335,7 +1351,7 @@ ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r) {
 
     encoded.len = ngx_base64_encoded_length(plain.len);
     encoded.data = ngx_pnalloc(r->pool, encoded.len);
-    if (NULL == encoded.data) {
+    if (encoded.data == NULL) {
         return NGX_ERROR;
     }
 
@@ -1343,7 +1359,7 @@ ngx_int_t ngx_http_auth_spnego_set_bogus_authorization(ngx_http_request_t *r) {
 
     final.len = sizeof("Basic ") + encoded.len - 1;
     final.data = ngx_pnalloc(r->pool, final.len);
-    if (NULL == final.data) {
+    if (final.data == NULL) {
         return NGX_ERROR;
     }
 
@@ -1377,6 +1393,7 @@ ngx_http_auth_spnego_build_tgs_principal(ngx_pool_t *pool,
                  KRB5_TGS_NAME, realm, realm);
     return name;
 }
+
 
 static krb5_error_code ngx_http_auth_spnego_verify_server_credentials(
     ngx_http_request_t *r, krb5_context kcontext, const char *principal_name,
@@ -1463,6 +1480,7 @@ done:
 
     return kerr;
 }
+
 
 static ngx_int_t ngx_http_auth_spnego_obtain_server_credentials(
     ngx_http_request_t *r, const char *service_name,
@@ -1739,7 +1757,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     gss_buffer_desc output_token = GSS_C_EMPTY_BUFFER;
     gss_channel_bindings_t cb;
 
-    if (NULL == ctx || ctx->token.len == 0)
+    if (ctx == NULL || ctx->token.len == 0)
         return ret;
 
     spnego_debug0("GSSAPI authorizing");
@@ -1852,7 +1870,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
         ctx->token_out_b64.len = ngx_base64_encoded_length(spnego_token.len);
         ctx->token_out_b64.data =
             ngx_pcalloc(r->pool, ctx->token_out_b64.len + 1);
-        if (NULL == ctx->token_out_b64.data) {
+        if (ctx->token_out_b64.data == NULL) {
             spnego_log_error("Not enough memory");
             gss_release_buffer(&minor_status, &output_token);
             spnego_error(NGX_ERROR);
@@ -1888,7 +1906,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
     if (output_token.length) {
         char *username = ngx_pnalloc(r->pool, output_token.length + 1);
-        if (NULL == username) {
+        if (username == NULL) {
             spnego_log_error("Not enough memory");
             spnego_error(NGX_ERROR);
         }
@@ -1953,9 +1971,9 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
     }
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_auth_spnego_module);
-    if (NULL == ctx) {
+    if (ctx == NULL) {
         ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_auth_spnego_ctx_t));
-        if (NULL == ctx) {
+        if (ctx == NULL) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
         ctx->ret = NGX_HTTP_UNAUTHORIZED;
