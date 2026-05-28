@@ -124,15 +124,50 @@ config file.
     auth_gss_allow_basic_fallback off
 
 These options affect the operation of basic authentication:
-* `auth_gss_realm`: Kerberos realm name.  If this is specified, the realm is
-  only passed to the nginx variable $remote_user if it differs from this
-  default.  To override this behavior, set *auth_gss_format_full* to 1 in your
-  configuration.
+* `auth_gss_realm`: Kerberos realm name.  Basic authentication fallback
+  requires either this to be set or a `default_realm` to be configured in
+  `krb5.conf` (the latter being the recommended approach). If this is specified,
+  the realm is only passed to the nginx variable `$remote_user` if it differs
+  from this default.  To override this behavior, set `auth_gss_format_full` to
+  `on` in your configuration.
 * `auth_gss_force_realm`: Forcibly authenticate using the realm configured in
   `auth_gss_realm` or the system default realm if `auth_gss_realm` is not set.
-  This will rewrite $remote_user if the client provided a different realm.  If
-  *auth_gss_format_full* is not set, $remote_user will not include a realm even
-  if one was specified by the client.
+  This will rewrite `$remote_user` if the client provided a different realm.  If
+  `auth_gss_format_full` is not enabled, `$remote_user` will not include a realm
+  even if one was specified by the client.
+* The nginx core [`auth_delay`](https://nginx.org/en/docs/http/ngx_http_core_module.html#auth_delay)
+  directive is honored when an incorrect username/password is provided.
+
+
+Optional Authentication
+-----------------------
+
+The SPNEGO protocol always begins with a 401 challenge from the server.
+Clients that lack Kerberos support, or choose not to authenticate, will
+stop at that 401 and never make a second request.  The nginx
+[`error_page`](https://nginx.org/en/docs/http/ngx_http_core_module.html#error_page)
+directive can be used to serve meaningful content on that 401 response —
+for instance, a login form provided by the same backend that handles
+authenticated requests.  The backend receives the request with
+`$remote_user` unset and can present a login form accordingly.
+
+    location /app.php {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        auth_gss on;
+        # ... other auth_gss directives ...
+        error_page 401 @unauthenticated;
+    }
+
+    location @unauthenticated {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$uri;
+    }
+
+Placing `error_page 401 @unauthenticated` in the `server` block rather
+than in individual `location` blocks causes it to apply to all locations
+that do not override it.
 
 
 Channel Bindings
