@@ -124,15 +124,17 @@ config file.
     auth_gss_allow_basic_fallback off
 
 These options affect the operation of basic authentication:
-* `auth_gss_realm`: Kerberos realm name.  If this is specified, the realm is
-  only passed to the nginx variable $remote_user if it differs from this
-  default.  To override this behavior, set *auth_gss_format_full* to 1 in your
-  configuration.
+* `auth_gss_realm`: Kerberos realm name.  Basic authentication fallback
+  requires either this to be set or a `default_realm` to be configured in
+  `krb5.conf` (the latter being the recommended approach). If this is specified,
+  the realm is only passed to the nginx variable `$remote_user` if it differs
+  from this default.  To override this behavior, set `auth_gss_format_full` to
+  `on` in your configuration.
 * `auth_gss_force_realm`: Forcibly authenticate using the realm configured in
   `auth_gss_realm` or the system default realm if `auth_gss_realm` is not set.
-  This will rewrite $remote_user if the client provided a different realm.  If
-  *auth_gss_format_full* is not set, $remote_user will not include a realm even
-  if one was specified by the client.
+  This will rewrite `$remote_user` if the client provided a different realm.  If
+  `auth_gss_format_full` is not enabled, `$remote_user` will not include a realm
+  even if one was specified by the client.
 * The nginx core [`auth_delay`](https://nginx.org/en/docs/http/ngx_http_core_module.html#auth_delay)
   directive is honored when an incorrect username/password is provided.
 

@@ -133,7 +133,7 @@ typedef struct {
     ngx_str_t token;         /* decoded Negotiate token */
     ngx_int_t head;          /* non-zero flag if headers set */
     ngx_int_t ret;           /* current return code */
-    ngx_str_t token_out_b64; /* base64 encoded output tokent */
+    ngx_str_t token_out_b64; /* base64 encoded output token */
 } ngx_http_auth_spnego_ctx_t;
 
 typedef struct {
@@ -146,6 +146,7 @@ typedef struct {
     char *service_ccache_prefix_path; /* "FILE:"-prefixed, built at config time;
                                          NULL when service_ccache is not set */
     ngx_str_t srvcname;
+    char *service_principal;          /* fully-qualified service principal */
     ngx_str_t shm_zone_name;
     ngx_flag_t fqun;
     ngx_flag_t force_realm;
@@ -426,6 +427,88 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
     ngx_conf_merge_off_value(conf->fqun, prev->fqun, 0);
     ngx_conf_merge_off_value(conf->force_realm, prev->force_realm, 0);
     ngx_conf_merge_off_value(conf->allow_basic, prev->allow_basic, 1);
+
+    if (!conf->realm.len) {
+        krb5_context kctx;
+        char *defrealm = NULL;
+
+        if (krb5_init_context(&kctx) != 0) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "auth_spnego: krb5_init_context() failed");
+            return NGX_CONF_ERROR;
+        }
+        if (krb5_get_default_realm(kctx, &defrealm) == 0) {
+            size_t rlen = ngx_strlen(defrealm);
+            u_char *rdata = ngx_palloc(cf->pool, rlen + 1);
+            if (rdata == NULL) {
+                krb5_free_default_realm(kctx, defrealm);
+                krb5_free_context(kctx);
+                return NGX_CONF_ERROR;
+            }
+            ngx_cpystrn(rdata, (u_char *)defrealm, rlen + 1);
+            conf->realm.data = rdata;
+            conf->realm.len = rlen;
+            krb5_free_default_realm(kctx, defrealm);
+        }
+        krb5_free_context(kctx);
+    }
+
+    if (!conf->realm.len && conf->allow_basic) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                           "auth_gss_allow_basic_fallback requires "
+                           "auth_gss_realm or a default_realm in krb5.conf");
+        return NGX_CONF_ERROR;
+    }
+
+    if (conf->srvcname.len || conf->allow_basic) {
+        ngx_http_core_srv_conf_t *cscf =
+            ((ngx_http_conf_ctx_t *)cf->ctx)
+                ->srv_conf[ngx_http_core_module.ctx_index];
+        ngx_str_t host = cscf->server_name;
+        ngx_str_t svc = conf->srvcname;
+        bool has_slash;
+        size_t len;
+
+        if (!svc.len) {
+            ngx_str_set(&svc, "HTTP");
+        }
+
+        has_slash = ngx_strchr(svc.data, '/') != NULL;
+
+        if (!has_slash && host.len == 0) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "auth_spnego: no server_name configured; set "
+                               "auth_gss_service_name to a full "
+                               "service/hostname principal");
+            return NGX_CONF_ERROR;
+        } else if (!has_slash && host.data[0] == '*') {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                               "auth_spnego: server_name \"%V\" is a "
+                               "wildcard; set auth_gss_service_name to a "
+                               "full service/hostname principal", &host);
+            return NGX_CONF_ERROR;
+        }
+
+        len = svc.len
+              + (has_slash ? 0 : 1 + host.len)
+              + (conf->realm.len ? conf->realm.len + 2 : 1);
+        conf->service_principal = ngx_palloc(cf->pool, len);
+        if (conf->service_principal == NULL)
+            return NGX_CONF_ERROR;
+
+        if (has_slash && conf->realm.len)
+            ngx_snprintf((u_char *)conf->service_principal, len,
+                         "%V@%V%Z", &svc, &conf->realm);
+        else if (has_slash)
+            ngx_snprintf((u_char *)conf->service_principal, len,
+                         "%V%Z", &svc);
+        else if (conf->realm.len)
+            ngx_snprintf((u_char *)conf->service_principal, len,
+                         "%V/%V@%V%Z", &svc, &host, &conf->realm);
+        else
+            ngx_snprintf((u_char *)conf->service_principal, len,
+                         "%V/%V%Z", &svc, &host);
+    }
 
     ngx_conf_merge_ptr_value(conf->auth_princs, prev->auth_princs,
                              NGX_CONF_UNSET_PTR);
@@ -993,8 +1076,6 @@ ngx_http_auth_spnego_realm_from_str(ngx_str_t s, size_t *realm_len)
 ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
                                      ngx_http_auth_spnego_ctx_t *ctx,
                                      ngx_http_auth_spnego_loc_conf_t *alcf) {
-    ngx_str_t host_name;
-    ngx_str_t service = ngx_null_string;
     ngx_str_t user;
     user.data = NULL;
     ngx_str_t new_user;
@@ -1016,50 +1097,7 @@ ngx_int_t ngx_http_auth_spnego_basic(ngx_http_request_t *r,
         return NGX_ERROR;
     }
 
-    /*
-     * Use the configured server name from the matched virtual host, not the
-     * client-supplied Host header.  r->headers_in.server is derived from the
-     * Host header and is fully client-controlled; embedding it in the Kerberos
-     * service principal would allow a client to request a ticket for an
-     * arbitrary hostname.
-     */
-    ngx_http_core_srv_conf_t *cscf =
-        ngx_http_get_module_srv_conf(r, ngx_http_core_module);
-    host_name = cscf->server_name;
-    if (host_name.len == 0) {
-        spnego_log_error("auth_spnego: no server_name configured; set "
-                         "auth_gss_service_name to a full service/hostname "
-                         "principal to avoid this requirement");
-        spnego_error(NGX_ERROR);
-    } else if (host_name.data[0] == '*') {
-        spnego_log_error("auth_spnego: server_name \"%V\" is a wildcard and "
-                         "cannot be used as a Kerberos service hostname; set "
-                         "auth_gss_service_name to a full service/hostname "
-                         "principal", &host_name);
-        spnego_error(NGX_ERROR);
-    }
-    service.len = alcf->srvcname.len + alcf->realm.len + 3;
-
-    if (ngx_strchr(alcf->srvcname.data, '/')) {
-        service.data = ngx_palloc(r->pool, service.len);
-        if (NULL == service.data) {
-            spnego_error(NGX_ERROR);
-        }
-
-        ngx_snprintf(service.data, service.len, "%V@%V%Z", &alcf->srvcname,
-                     &alcf->realm);
-    } else {
-        service.len += host_name.len;
-        service.data = ngx_palloc(r->pool, service.len);
-        if (NULL == service.data) {
-            spnego_error(NGX_ERROR);
-        }
-
-        ngx_snprintf(service.data, service.len, "%V/%V@%V%Z", &alcf->srvcname,
-                     &host_name, &alcf->realm);
-    }
-
-    code = krb5_parse_name(kcontext, (const char *)service.data, &server);
+    code = krb5_parse_name(kcontext, alcf->service_principal, &server);
 
     if (code) {
         spnego_log_error("Kerberos error:  Unable to parse service name");
@@ -1246,8 +1284,6 @@ end:
         krb5_free_principal(kcontext, client);
     if (server)
         krb5_free_principal(kcontext, server);
-    if (service.data)
-        ngx_pfree(r->pool, service.data);
     if (user.data)
         ngx_pfree(r->pool, user.data);
     if (options)
@@ -1728,20 +1764,11 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
     }
     spnego_debug1("Use keytab %s", alcf->keytab_path);
 
-    if (alcf->srvcname.len > 0) {
-        /* if there is a specific service prinicipal set in the configuration
-         * file, we need to use it.  Otherwise, use the default of no
-         * credentials
-         */
-        service.length = alcf->srvcname.len + alcf->realm.len + 1; /* '@', no '\0' */
-        service.value = ngx_palloc(r->pool, service.length + 1);   /* +1 for '\0' */
-        if (NULL == service.value) {
-            spnego_error(NGX_ERROR);
-        }
-        ngx_snprintf(service.value, service.length + 1, "%V@%V%Z", &alcf->srvcname,
-                     &alcf->realm);
+    if (alcf->service_principal) {
+        service.length = ngx_strlen(alcf->service_principal);
+        service.value = alcf->service_principal;
 
-        spnego_debug1("Using service principal: %s", service.value);
+        spnego_debug1("Using service principal: %s", alcf->service_principal);
         major_status =
             gss_import_name(&minor_status, &service,
                             (gss_OID)GSS_KRB5_NT_PRINCIPAL_NAME, &my_gss_name);
@@ -1749,7 +1776,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
             spnego_log_error("%s Used service principal: %s",
                              get_gss_error(r->pool, minor_status,
                                            "gss_import_name() failed"),
-                             (u_char *)service.value);
+                             alcf->service_principal);
             spnego_error(NGX_ERROR);
         }
         gss_buffer_desc human_readable_gss_name = GSS_C_EMPTY_BUFFER;
@@ -1757,10 +1784,10 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
                                         &human_readable_gss_name, NULL);
 
         if (GSS_ERROR(major_status)) {
-            spnego_log_error("%s Used service principal: %s ",
+            spnego_log_error("%s Used service principal: %s",
                              get_gss_error(r->pool, minor_status,
                                            "gss_display_name() failed"),
-                             (u_char *)service.value);
+                             alcf->service_principal);
         }
         spnego_debug2("my_gss_name %*s", human_readable_gss_name.length,
                       human_readable_gss_name.value);
@@ -1770,7 +1797,7 @@ ngx_http_auth_spnego_auth_user_gss(ngx_http_request_t *r,
 
         if (alcf->constrained_delegation) {
             ngx_http_auth_spnego_obtain_server_credentials(
-                r, (char *)service.value, alcf->keytab_prefix_path,
+                r, alcf->service_principal, alcf->keytab_prefix_path,
                 alcf->service_ccache_prefix_path);
         }
 
