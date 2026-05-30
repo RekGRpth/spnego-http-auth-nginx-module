@@ -759,7 +759,7 @@ ngx_http_auth_spnego_headers(ngx_http_request_t *r,
         ngx_str_t value2 = ngx_null_string;
         value2.len = sizeof("Basic realm=\"\", charset=\"UTF-8\"") - 1 + alcf->realm.len;
         value2.data = ngx_pcalloc(r->pool, value2.len);
-        if (NULL == value2.data) {
+        if (value2.data == NULL) {
             return NGX_ERROR;
         }
         ngx_snprintf(value2.data, value2.len, "Basic realm=\"%V\", charset=\"UTF-8\"",
@@ -1992,15 +1992,15 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
     if (alcf->allow_basic) {
         spnego_debug0("Detect basic auth");
         ret = ngx_http_auth_basic_user(r);
-        if (NGX_OK == ret) {
+        if (ret == NGX_OK) {
             spnego_debug0("Basic auth credentials supplied by client");
             /* If basic auth is enabled and basic creds are supplied
              * attempt basic auth.  If we attempt basic auth, we do
              * not fall through to real SPNEGO */
             if (NGX_OK != ngx_http_auth_spnego_basic(r, ctx, alcf)) {
                 spnego_debug0("Basic auth failed");
-                if (NGX_ERROR ==
-                    ngx_http_auth_spnego_headers_basic_only(r, ctx, alcf)) {
+                if (ngx_http_auth_spnego_headers_basic_only(r, ctx, alcf) ==
+                    NGX_ERROR) {
                     spnego_debug0("Error setting headers");
                     return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
                 }
@@ -2022,20 +2022,20 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
     /* Basic auth either disabled or not supplied by client */
     spnego_debug0("Detect SPNEGO token");
     ret = ngx_http_auth_spnego_token(r, ctx);
-    if (NGX_OK == ret) {
+    if (ret == NGX_OK) {
         spnego_debug0("Client sent a reasonable Negotiate header");
         ret = ngx_http_auth_spnego_auth_user_gss(r, ctx, alcf);
-        if (NGX_ERROR == ret) {
+        if (ret == NGX_ERROR) {
             spnego_debug0("GSSAPI failed");
             return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
         }
-        if (NGX_DECLINED == ret) {
+        if (ret == NGX_DECLINED) {
             spnego_debug0("GSSAPI failed");
             if (!alcf->allow_basic) {
                 return (ctx->ret = NGX_HTTP_FORBIDDEN);
             }
-            if (NGX_ERROR ==
-                ngx_http_auth_spnego_headers_basic_only(r, ctx, alcf)) {
+            if (ngx_http_auth_spnego_headers_basic_only(r, ctx, alcf) ==
+                NGX_ERROR) {
                 spnego_debug0("Error setting headers");
                 return (ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR);
             }
@@ -2054,7 +2054,7 @@ static ngx_int_t ngx_http_auth_spnego_handler(ngx_http_request_t *r) {
 
     switch (ret) {
     case NGX_DECLINED: /* DECLINED, but not yet FORBIDDEN */
-        if (NGX_ERROR == ngx_http_auth_spnego_headers(r, ctx, NULL, alcf)) {
+        if (ngx_http_auth_spnego_headers(r, ctx, NULL, alcf) == NGX_ERROR) {
             spnego_debug0("Error setting headers");
             ctx->ret = NGX_HTTP_INTERNAL_SERVER_ERROR;
         } else {
