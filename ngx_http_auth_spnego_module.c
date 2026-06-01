@@ -453,14 +453,14 @@ static char *ngx_http_auth_spnego_merge_loc_conf(ngx_conf_t *cf, void *parent,
         krb5_free_context(kctx);
     }
 
-    if (!conf->realm.len && conf->allow_basic) {
+    if (conf->protect && !conf->realm.len && conf->allow_basic) {
         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
                            "auth_gss_allow_basic_fallback requires "
                            "auth_gss_realm or a default_realm in krb5.conf");
         return NGX_CONF_ERROR;
     }
 
-    if (conf->srvcname.len || conf->allow_basic) {
+    if (conf->protect && (conf->srvcname.len || conf->allow_basic)) {
         ngx_http_core_srv_conf_t *cscf =
             ((ngx_http_conf_ctx_t *)cf->ctx)
                 ->srv_conf[ngx_http_core_module.ctx_index];
