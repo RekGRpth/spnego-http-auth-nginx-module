@@ -1,22 +1,66 @@
 ngx_addon_name=ngx_http_auth_spnego_module
-ngx_feature_libs="-lgssapi_krb5 -lkrb5 -lcom_err"
 
-if uname -o | grep -q FreeBSD; then
-    ngx_feature_libs="$ngx_feature_libs -lgssapi"
+GSSAPI_CFLAGS=""
+GSSAPI_LIBS=""
+GSSAPI_FLAVOR="unknown"
+
+if pkg-config --exists mit-krb5-gssapi 2>/dev/null; then
+    GSSAPI_CFLAGS=$(pkg-config --cflags mit-krb5-gssapi)
+    GSSAPI_LIBS=$(pkg-config --libs mit-krb5-gssapi)
+    GSSAPI_FLAVOR="MIT"
+elif pkg-config --exists heimdal-gssapi 2>/dev/null; then
+    GSSAPI_CFLAGS=$(pkg-config --cflags heimdal-gssapi)
+    GSSAPI_LIBS=$(pkg-config --libs heimdal-gssapi)
+    GSSAPI_FLAVOR="Heimdal"
+elif krb5-config --version >/dev/null 2>&1; then
+    GSSAPI_CFLAGS=$(krb5-config --cflags gssapi)
+    GSSAPI_LIBS=$(krb5-config --libs gssapi)
+    case "$(krb5-config --vendor 2>/dev/null)" in
+        *Heimdal*)       GSSAPI_FLAVOR="Heimdal" ;;
+        *Massachusetts*) GSSAPI_FLAVOR="MIT" ;;
+    esac
 fi
 
-if uname -a | grep -q NetBSD; then
-    ngx_feature_libs="-lgssapi -lkrb5 -lcom_err"
+if [ "$GSSAPI_FLAVOR" = "unknown" ]; then
+    echo "ngx_configure_error: GSSAPI development libraries not found"
+    exit 1
 fi
 
-if test -n "$ngx_module_link"; then
-    ngx_module_type=HTTP
-    ngx_module_name=ngx_http_auth_spnego_module
-    ngx_module_srcs="$ngx_addon_dir/ngx_http_auth_spnego_module.c"
-    ngx_module_libs="$ngx_feature_libs"
-    . auto/module
-else
-    HTTP_MODULES="$HTTP_MODULES ngx_http_auth_spnego_module"
-    NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_auth_spnego_module.c"
-    CORE_LIBS="$CORE_LIBS $ngx_feature_libs"
-fi
+NGX_CFLAGS="$NGX_CFLAGS $GSSAPI_CFLAGS"
+
+ngx_feature="GSSAPI ($GSSAPI_FLAVOR)"
+ngx_feature_name=$([ "$GSSAPI_FLAVOR" = "Heimdal" ] && echo ngx_have_heimdal_gssapi || echo ngx_have_mit_gssapi)
+ngx_feature_run=no
+ngx_feature_incs="#include <gssapi/gssapi.h>"
+ngx_feature_path="$(echo "$GSSAPI_CFLAGS" | tr ' ' '\n' | sed -n 's/^-I//p' | tr '\n' ' ')"
+ngx_feature_libs="$GSSAPI_LIBS"
+ngx_feature_test="gss_ctx_id_t ctx = GSS_C_NO_CONTEXT; (void) ctx;"
+. auto/feature
+
+ngx_feature="gss_acquire_cred_from()"
+ngx_feature_name="ngx_have_gss_acquire_cred_from"
+ngx_feature_run=no
+ngx_feature_incs="#include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>"
+ngx_feature_path="$(echo "$GSSAPI_CFLAGS" | tr ' ' '\n' | sed -n 's/^-I//p' | tr '\n' ' ')"
+ngx_feature_libs="$GSSAPI_LIBS"
+ngx_feature_test="gss_acquire_cred_from(NULL, GSS_C_NO_NAME, GSS_C_INDEFINITE, GSS_C_NO_OID_SET, GSS_C_BOTH, NULL, NULL, NULL, NULL);"
+. auto/feature
+ngx_found_gss_acquire_cred_from=$ngx_found
+
+ngx_feature="gss_store_cred_into()"
+ngx_feature_name="ngx_have_gss_store_cred_into"
+ngx_feature_run=no
+ngx_feature_incs="#include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>"
+ngx_feature_path="$(echo "$GSSAPI_CFLAGS" | tr ' ' '\n' | sed -n 's/^-I//p' | tr '\n' ' ')"
+ngx_feature_libs="$GSSAPI_LIBS"
+ngx_feature_test="gss_store_cred_into(NULL, GSS_C_NO_CREDENTIAL, GSS_C_INITIATE, GSS_C_NULL_OID, 0, 0, NULL, NULL, NULL);"
+. auto/feature
+ngx_found_gss_store_cred_into=$ngx_found
+
+ngx_module_type=HTTP
+ngx_module_name=ngx_http_auth_spnego_module
+ngx_module_srcs="$ngx_addon_dir/ngx_http_auth_spnego_module.c"
+ngx_module_libs="$GSSAPI_LIBS"
+. auto/module
